@@ -13,7 +13,7 @@
   <a href="https://github.com/pith-hash/pith-h264/actions/workflows/cd.yml"><img alt="CD" src="https://github.com/pith-hash/pith-h264/actions/workflows/cd.yml/badge.svg"></a>
   <a href="https://github.com/pith-hash/pith-h264/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/pith-hash/pith-h264?display_name=tag&sort=semver"></a>
   <a href="https://github.com/n24q02m/better-semantic-release"><img alt="semantic-release" src="https://img.shields.io/badge/semantic--release-e10079?logo=semantic-release&logoColor=white"></a>
-  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/github/license/pith-hash/pith-h264"></a>
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-blue.svg"></a>
 </p>
 
 <p align="center">
