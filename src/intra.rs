@@ -1030,3 +1030,65 @@ fn dc_fallback(out: &mut [u8; 64], l: &[i32; 8], t: &[i32; 16], has_l: bool, has
     };
     out.fill(dc);
 }
+
+#[cfg(test)]
+mod dc_helper_tests {
+    use super::*;
+
+    #[test]
+    fn dc_mean_arms() {
+        let top = [4u8; 16];
+        let left = [2u8; 16];
+        // Both neighbours: (left+top sums + n) >> log2(2n) — for
+        // n = 16 edges that is >> 8.
+        let both = dc_mean(&top, &left, true, true);
+        assert_eq!(both, ((32u32 + 64 + 16) >> 8) as u8);
+        // Top only: plain mean.
+        assert_eq!(dc_mean(&top, &left, true, false), 4);
+        // Left only.
+        assert_eq!(dc_mean(&top, &left, false, true), 2);
+        // Neither: the 128 constant.
+        assert_eq!(dc_mean(&top, &left, false, false), 128);
+    }
+
+    #[test]
+    fn mode_rejects_bound_the_tables() {
+        // Error arms past the last defined pred mode, both sizes.
+        let nb = NbSamples {
+            top: [0; 16],
+            left: [0; 16],
+            top_right: None,
+            top_left: None,
+            has_left: true,
+            has_top: true,
+        };
+        let mut out4 = [0u8; 16];
+        assert!(pred4x4(9, &nb, &mut out4).is_err());
+        let mut out16 = [0u8; 256];
+        assert!(pred16x16(4, &nb, &mut out16).is_err());
+    }
+}
+
+#[cfg(test)]
+mod dc_fallback_tests {
+    use super::dc_fallback;
+
+    #[test]
+    fn dc_fallback_arms() {
+        let l = [8i32; 8];
+        let t = [4i32; 16];
+        let mut out = [0u8; 64];
+        // Both: (sum(l) + sum(t[..8]) + 8) >> 4 = (64 + 32 + 8) >> 4.
+        dc_fallback(&mut out, &l, &t, true, true);
+        assert_eq!(out[0], ((64 + 32 + 8) >> 4) as u8);
+        // Left only: (sum(l) + 4) >> 3 = 68 >> 3 = 8.
+        dc_fallback(&mut out, &l, &t, true, false);
+        assert_eq!(out[0], ((64 + 4) >> 3) as u8);
+        // Top only: (sum(t[..8]) + 4) >> 3 = 36 >> 3 = 4.
+        dc_fallback(&mut out, &l, &t, false, true);
+        assert_eq!(out[0], ((32 + 4) >> 3) as u8);
+        // Neither: constant 128.
+        dc_fallback(&mut out, &l, &t, false, false);
+        assert_eq!(out[0], 128);
+    }
+}
