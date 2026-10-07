@@ -203,6 +203,11 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// Serializes every test that reads/writes reference.json: cargo
+    /// runs test threads in parallel and the file is shared state.
+    pub(crate) static REF_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn hex_is_lowercase_two_digits_per_byte() {
@@ -254,6 +259,7 @@ mod tests {
 
     #[test]
     fn run_gen_then_verify_roundtrip() {
+        let _g = REF_LOCK.lock().unwrap();
         // Regenerate the canonical document, then verify: the on-disk
         // file must already equal a fresh computation.
         assert_eq!(run("verify"), ExitCode::SUCCESS);
@@ -265,11 +271,13 @@ mod tests {
 
     #[test]
     fn run_rejects_unknown_mode() {
+        let _g = REF_LOCK.lock().unwrap();
         assert_eq!(run("nonsense"), ExitCode::from(2));
     }
 
     #[test]
     fn run_empty_mode_is_verify() {
+        let _g = REF_LOCK.lock().unwrap();
         // The no-argument CLI invocation is the CI gate.
         assert_eq!(run(""), ExitCode::SUCCESS);
     }
@@ -283,6 +291,7 @@ mod gen_mode_tests {
     /// corpus, stable digest — the CD gate's no-drift contract.
     #[test]
     fn gen_rewrites_identical_bytes() {
+        let _g = super::tests::REF_LOCK.lock().unwrap();
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
         let before = fs::read(root.join(REFERENCE_PATH)).unwrap();
         assert_eq!(run("gen"), ExitCode::SUCCESS);
