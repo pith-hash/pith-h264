@@ -4,7 +4,7 @@
 
 - Repo: `pith-hash/pith-h264`
 - Description: H.264/AVC subset decoding: NAL/SPS/PPS, CAVLC+CABAC slices, transforms, in-loop deblocking (zero-dep Rust)
-- License: Apache-2.0
+- License: MIT
 
 ## Build & Test
 
