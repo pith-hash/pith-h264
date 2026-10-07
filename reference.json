@@ -1,0 +1,415 @@
+{
+  "suite": "pith",
+  "crate": "pith-h264",
+  "format_version": 1,
+  "generator": "cargo run --bin gen-reference -- gen",
+  "vectors": [
+    {
+      "name": "flat16",
+      "input_kind": "fixture-file",
+      "input_path": "tests/fixtures/flat16.h264",
+      "input_sha256": "40674da08f5a595da4be71a461b9cc3ae7ca9cdc76369fcd2bb6dad8ba9ce937",
+      "frames": 1,
+      "width": 16,
+      "height": 16,
+      "planes_sha256": "524961aab71df0b48291ed8507c78051cde1dad5ec6e305fdd083e7667726519"
+    },
+    {
+      "name": "flat16b",
+      "input_kind": "fixture-file",
+      "input_path": "tests/fixtures/flat16b.h264",
+      "input_sha256": "87524ed91cdc7f8af5184950a2caa89f482f594de4090bcd871535b1dca9d259",
+      "frames": 1,
+      "width": 16,
+      "height": 16,
+      "planes_sha256": "5642eff3336a3cdd02463a8170eddad79bba27588e9146f642646be957268ca8"
+    },
+    {
+      "name": "flat16i4",
+      "input_kind": "fixture-file",
+      "input_path": "tests/fixtures/flat16i4.h264",
+      "input_sha256": "f27094e00c0d0c7422a12a23004d900ab07486efd0cbc42a795377c76cd88583",
+      "frames": 1,
+      "width": 16,
+      "height": 16,
+      "planes_sha256": "524961aab71df0b48291ed8507c78051cde1dad5ec6e305fdd083e7667726519"
+    },
+    {
+      "name": "gd16",
+      "input_kind": "fixture-file",
+      "input_path": "tests/fixtures/gd16.h264",
+      "input_sha256": "c2177dddb9eddb6f8122349b37292d8eff6dcbb6d2215e5d22a06d3a2270d402",
+      "frames": 1,
+      "width": 16,
+      "height": 16,
+      "planes_sha256": "54af6005c09e4df504dd5c301b87acaa8e2fefdd49f2c7647441cbcf54d6d9c7"
+    },
+    {
+      "name": "gd16_nd",
+      "input_kind": "fixture-file",
+      "input_path": "tests/fixtures/gd16_nd.h264",
+      "input_sha256": "e04e27bf7260678658734419223e714343f4ab26fda1c95f532702604c5163ad",
+      "frames": 1,
+      "width": 16,
+      "height": 16,
+      "planes_sha256": "54af6005c09e4df504dd5c301b87acaa8e2fefdd49f2c7647441cbcf54d6d9c7"
+    },
+    {
+      "name": "grad16",
+      "input_kind": "fixture-file",
+      "input_path": "tests/fixtures/grad16.h264",
+      "input_sha256": "3d1f9f211caaf310bf3bdf0a0d07ee02ff31cb667a6cb7791928780d389865a4",
+      "frames": 1,
+      "width": 16,
+      "height": 16,
+      "planes_sha256": "1b22f7a976eb902939a23fa0111ef46a50b4675148c116220d4ccfd8408605e5"
+    },
+    {
+      "name": "grad16_nd",
+      "input_kind": "fixture-file",
+      "input_path": "tests/fixtures/grad16_nd.h264",
+      "input_sha256": "44948fd3f2fb63184594124687e90072aefc7327b81533ab4118788278f9b7b6",
+      "frames": 1,
+      "width": 16,
+      "height": 16,
+      "planes_sha256": "3aa0045acd92f094385be42123aa90f51d3e889026ec9dabac2fc4fbae003075"
+    },
+    {
+      "name": "hgrad32",
+      "input_kind": "fixture-file",
+      "input_path": "tests/fixtures/hgrad32.h264",
+      "input_sha256": "3d67511d7a3962ff104ee9f6a162515da239fa1576082b3c615e6f712845c116",
+      "frames": 1,
+      "width": 32,
+      "height": 32,
+      "planes_sha256": "a9fa6049d187e1554545afd42ca65b490050a38a4670c5904ff0aba9c2f1264d"
+    },
+    {
+      "name": "i1",
+      "input_kind": "fixture-file",
+      "input_path": "tests/fixtures/i1.h264",
+      "input_sha256": "0834b5a66521b29d882003e10345219e75ce97d75f87fb1cbde60d19542d6c73",
+      "frames": 1,
+      "width": 16,
+      "height": 16,
+      "planes_sha256": "d40c280d632cd712b5530ce2b00fb7befe0fdfc564f876101bd0b3369a6323c5"
+    },
+    {
+      "name": "m1_b3_64x64",
+      "input_kind": "fixture-file",
+      "input_path": "tests/fixtures/m1_b3_64x64.h264",
+      "input_sha256": "c05a5fcea3000bb44ef594bad88702fb9d9403ff6ed04ff30cd68ad5d63ce88d",
+      "frames": 10,
+      "width": 64,
+      "height": 64,
+      "planes_sha256": "8d5fbe3aa3cbfeea51d611fee641c9a95ebe7cbbf0fcc268470f08f4717fe384"
+    },
+    {
+      "name": "m2_b2_refs_64x64",
+      "input_kind": "fixture-file",
+      "input_path": "tests/fixtures/m2_b2_refs_64x64.h264",
+      "input_sha256": "5a2e9e466ec9d7e3ed1f6f90518a14eadced6107cc478184c5e0c9c69288d7a2",
+      "frames": 12,
+      "width": 64,
+      "height": 64,
+      "planes_sha256": "2dc956b710811eaaede3590cddc1ff638a8e570bac741f569b34a9bf2b9c988b"
+    },
+    {
+      "name": "m3_b4_strat_64x48",
+      "input_kind": "fixture-file",
+      "input_path": "tests/fixtures/m3_b4_strat_64x48.h264",
+      "input_sha256": "adc291085bc6ea193c682f3469270aa77769fb9bb4edd10cd15448fb220e5fe6",
+      "frames": 12,
+      "width": 64,
+      "height": 48,
+      "planes_sha256": "4b0f25cb512519b758be0e7a6e9cefb09904dae9a6a59807553a032ff1567823"
+    },
+    {
+      "name": "m4_direct_temp_32x32",
+      "input_kind": "fixture-file",
+      "input_path": "tests/fixtures/m4_direct_temp_32x32.h264",
+      "input_sha256": "810e77dbe7049b1e9aa540d7afc6bcd8af7e7e7ff6ad117891e6bafddb263da6",
+      "frames": 8,
+      "width": 32,
+      "height": 32,
+      "planes_sha256": "de4a1cea73ec4e1cbb1a080472e153cb2bbb909328f01accc0873668404c75e0"
+    },
+    {
+      "name": "m5_direct_spat_32x32",
+      "input_kind": "fixture-file",
+      "input_path": "tests/fixtures/m5_direct_spat_32x32.h264",
+      "input_sha256": "e3ca86b124f830279dbd50be79122d3f26a248e4072977dbb07c8f065379f349",
+      "frames": 8,
+      "width": 32,
+      "height": 32,
+      "planes_sha256": "de4a1cea73ec4e1cbb1a080472e153cb2bbb909328f01accc0873668404c75e0"
+    },
+    {
+      "name": "m6_bpyr_64x64",
+      "input_kind": "fixture-file",
+      "input_path": "tests/fixtures/m6_bpyr_64x64.h264",
+      "input_sha256": "78fda9903c096c6216afa851378401cffd0bf1a6e1ad69b26c7f275abd10b5a6",
+      "frames": 12,
+      "width": 64,
+      "height": 64,
+      "planes_sha256": "d972ba2b371b84925052982a6cbcf1daa496748c7aa3f715f3f9628624e72835"
+    },
+    {
+      "name": "p16",
+      "input_kind": "fixture-file",
+      "input_path": "tests/fixtures/p16.h264",
+      "input_sha256": "26bff9ab4946410071f47396e75e74bf7f9462191730608e85410ec014f50662",
+      "frames": 3,
+      "width": 16,
+      "height": 16,
+      "planes_sha256": "154361c21026188243ec92f98a834ab0439f35d0576cb3a2643feff769699222"
+    },
+    {
+      "name": "p32",
+      "input_kind": "fixture-file",
+      "input_path": "tests/fixtures/p32.h264",
+      "input_sha256": "5470b0d662c03321f20c1fced80e5d4722bc5778ad5249e808f3f9e68791d778",
+      "frames": 5,
+      "width": 32,
+      "height": 32,
+      "planes_sha256": "ef1dcdba825d48cef05c756eb91f1a18badab9a143835364ab3850b20010118a"
+    },
+    {
+      "name": "p32x16",
+      "input_kind": "fixture-file",
+      "input_path": "tests/fixtures/p32x16.h264",
+      "input_sha256": "8f031dd6998c3cb63d7e7e049552228b75578aefeee545bb2213e938d78f415a",
+      "frames": 3,
+      "width": 32,
+      "height": 16,
+      "planes_sha256": "af3188e331c6b2ddebef8679848874d489c25b994db8d4649e9e04484807214f"
+    },
+    {
+      "name": "p32x64",
+      "input_kind": "fixture-file",
+      "input_path": "tests/fixtures/p32x64.h264",
+      "input_sha256": "8e0d02deb83b909bda0ec8f91cef69069019e5836f95b0b4c755674cb303d97e",
+      "frames": 5,
+      "width": 32,
+      "height": 64,
+      "planes_sha256": "94f25d9ca4a8ee3dd083401687bfe0eff836e9c2a16247333a76f6b4263daa0f"
+    },
+    {
+      "name": "p48",
+      "input_kind": "fixture-file",
+      "input_path": "tests/fixtures/p48.h264",
+      "input_sha256": "721274cd7adc69ffd12fff1fb33a1626afb751287e309a70c239b3d75818ed0f",
+      "frames": 5,
+      "width": 48,
+      "height": 48,
+      "planes_sha256": "6f44a1733c459c8100c28635c10173251ec179abb5800e4aee69670bbe21073e"
+    },
+    {
+      "name": "p64",
+      "input_kind": "fixture-file",
+      "input_path": "tests/fixtures/p64.h264",
+      "input_sha256": "ad50c4bf3d4372b60bc55dd03d4cd3725c1863fa24f4e0d94d8020809525a5e0",
+      "frames": 5,
+      "width": 64,
+      "height": 64,
+      "planes_sha256": "b0571cdf4a37f2005cb973052498b4c8dc06c2805bb9179e35cfb50f91856da4"
+    },
+    {
+      "name": "p64x32",
+      "input_kind": "fixture-file",
+      "input_path": "tests/fixtures/p64x32.h264",
+      "input_sha256": "0c17f04e8511625723c1e3f770339faaabbfe312f6cf22288090bcb6e25943e9",
+      "frames": 5,
+      "width": 64,
+      "height": 32,
+      "planes_sha256": "0e6daf18655e57ffb3ac66b065adaed0df9999bf812514715d7d3754c2ec645c"
+    },
+    {
+      "name": "p_cabac_only",
+      "input_kind": "fixture-file",
+      "input_path": "tests/fixtures/p_cabac_only.h264",
+      "input_sha256": "931694971f7d0be7815c4c6405c90f0fe80b2c6a888e368efaef86d6788a7b26",
+      "frames": 10,
+      "width": 64,
+      "height": 64,
+      "planes_sha256": "22c38a43d3bc97bc5b04b02e350915a96097d502416ede9e500c23934b0b81a6"
+    },
+    {
+      "name": "t1_32x32_ip",
+      "input_kind": "fixture-file",
+      "input_path": "tests/fixtures/t1_32x32_ip.h264",
+      "input_sha256": "937d317feb31f8cc7f6bc3a441fc27ae35b53f086f2dec922381355b202dfc66",
+      "frames": 5,
+      "width": 32,
+      "height": 32,
+      "planes_sha256": "fbe546f6eaba335adeb60169c0182f99f2da8fc4b4e30dc2d6b59e2dd1cf8b5b"
+    },
+    {
+      "name": "t1_8x8_64x64",
+      "input_kind": "fixture-file",
+      "input_path": "tests/fixtures/t1_8x8_64x64.h264",
+      "input_sha256": "e17e49950e046410c1f6e40cecc566274eab156fbe7f97936870b19801763624",
+      "frames": 12,
+      "width": 64,
+      "height": 64,
+      "planes_sha256": "0631e857c7e3f5f2b204c837ae4caa164b0fe9a4be55883e867c2ad873989e94"
+    },
+    {
+      "name": "t1_nd",
+      "input_kind": "fixture-file",
+      "input_path": "tests/fixtures/t1_nd.h264",
+      "input_sha256": "153cf7b28b2eddd104526fc8530886f89c707c6ec05efc0503a50949e1e2dd6b",
+      "frames": 5,
+      "width": 32,
+      "height": 32,
+      "planes_sha256": "cc436f098a541b27d474078b0f8bf88d2b3ddabcae4d647a792039f1d30afd62"
+    },
+    {
+      "name": "t2_48x48_ip",
+      "input_kind": "fixture-file",
+      "input_path": "tests/fixtures/t2_48x48_ip.h264",
+      "input_sha256": "061dd13c6e3387d1a8bffda15fdd5736c667811e96a6194f68f42241071886d9",
+      "frames": 5,
+      "width": 48,
+      "height": 48,
+      "planes_sha256": "77be0569624782964324214733628ee36b05dcdd910d3c0a69ba1a536513f8c6"
+    },
+    {
+      "name": "t2_8x8_part_64x64",
+      "input_kind": "fixture-file",
+      "input_path": "tests/fixtures/t2_8x8_part_64x64.h264",
+      "input_sha256": "a998fa89b52920442ef3bd5d586d790bf57ca60f1b93411948cdd6d431b69ba8",
+      "frames": 10,
+      "width": 64,
+      "height": 64,
+      "planes_sha256": "3bef8c95f524429d7ce46d3f5d6673bd96bda87f56239eb52e15e4dd794970e8"
+    },
+    {
+      "name": "t3_16x16",
+      "input_kind": "fixture-file",
+      "input_path": "tests/fixtures/t3_16x16.h264",
+      "input_sha256": "c3604a1a8b9e0fd78c365e2630d574a2dd96d40b0ebfa64588fd69afad7ab447",
+      "frames": 4,
+      "width": 16,
+      "height": 16,
+      "planes_sha256": "60b2ba793505f43baba130ce20ed785fcd87ed80942e5f622b9e57ca659e3b77"
+    },
+    {
+      "name": "t3_i8x8_64x48",
+      "input_kind": "fixture-file",
+      "input_path": "tests/fixtures/t3_i8x8_64x48.h264",
+      "input_sha256": "afc41bcdb7b2f77e2302146983dcbe6662c55c89098e030ac354271fdc53ab23",
+      "frames": 12,
+      "width": 64,
+      "height": 48,
+      "planes_sha256": "e9ad60653cd0496a1ded1763a030e538f22715f1f4ea6f63ac2106ece3f7e0be"
+    },
+    {
+      "name": "t3_nd",
+      "input_kind": "fixture-file",
+      "input_path": "tests/fixtures/t3_nd.h264",
+      "input_sha256": "87e4971da1b3bb31674b5a90d103b9ec3027a4b7d1fb8ef4fe23cc95dca72c29",
+      "frames": 4,
+      "width": 16,
+      "height": 16,
+      "planes_sha256": "fb09a4be8228b1241b582a26e0a5cc99463c817c31e80ab418c170603bbc6bfe"
+    },
+    {
+      "name": "t4_80x64_sliced",
+      "input_kind": "fixture-file",
+      "input_path": "tests/fixtures/t4_80x64_sliced.h264",
+      "input_sha256": "d04f435fb274021516c234f438be5226462773291628b7dcdf6be1bdf740b90e",
+      "frames": 6,
+      "width": 80,
+      "height": 64,
+      "planes_sha256": "b87f82ce001b91a45f2313d5d27a3e65b1ae7391094ea64358454af6298cfa2a"
+    },
+    {
+      "name": "t4_8x8_umh_64x64",
+      "input_kind": "fixture-file",
+      "input_path": "tests/fixtures/t4_8x8_umh_64x64.h264",
+      "input_sha256": "3c20db067c13da46851dadccaef86319e0f36887d718167655990e9ee4426732",
+      "frames": 12,
+      "width": 64,
+      "height": 64,
+      "planes_sha256": "bc533fe72de5554d2cc26dcb81202bf4167317ed9a435c0819492d7f6dff2738"
+    },
+    {
+      "name": "t5_64x64_i16",
+      "input_kind": "fixture-file",
+      "input_path": "tests/fixtures/t5_64x64_i16.h264",
+      "input_sha256": "e1ad5d749239eb74afb92a391560a505c43bc1d2269cf07529982be4291a0db3",
+      "frames": 10,
+      "width": 64,
+      "height": 64,
+      "planes_sha256": "e5d9ef696f529760a6f651b64c4484f21bcbc55605459b24245dd5a6921a4351"
+    },
+    {
+      "name": "t_cab10f",
+      "input_kind": "fixture-file",
+      "input_path": "tests/fixtures/t_cab10f.h264",
+      "input_sha256": "9f739d75659a2bec8085d9d5fc324ad99e9a118c0a1921a285917cf11f240d4e",
+      "frames": 10,
+      "width": 64,
+      "height": 64,
+      "planes_sha256": "d35373749767ec53a99baff69ce25962b99a4a458bbf59f57cdd7c035b6a9d8a"
+    },
+    {
+      "name": "t_cab1f",
+      "input_kind": "fixture-file",
+      "input_path": "tests/fixtures/t_cab1f.h264",
+      "input_sha256": "520db45094425e3a2190feaae404baebaf7a7c936facc0ab8aca1456e8f2943d",
+      "frames": 1,
+      "width": 64,
+      "height": 64,
+      "planes_sha256": "c1dd0eb80a4347ec684a2d7e2ca813cffffe192ad5527b873d6a359bb83ae85e"
+    },
+    {
+      "name": "w1_wp_exp_64x64",
+      "input_kind": "fixture-file",
+      "input_path": "tests/fixtures/w1_wp_exp_64x64.h264",
+      "input_sha256": "3652ff6693e29e530dd72f1398f4fdbfa23ccf310b2e3c318a9f2e5fc2207f28",
+      "frames": 10,
+      "width": 64,
+      "height": 64,
+      "planes_sha256": "c2e72e16f5f3c77748903338cf719c78718d684293238571c27ec7296725b89c"
+    },
+    {
+      "name": "w2_wp_simple_64x64",
+      "input_kind": "fixture-file",
+      "input_path": "tests/fixtures/w2_wp_simple_64x64.h264",
+      "input_sha256": "6046785d7b683d3ccc5a0a6d303f03f3e056d99488cd4c2d1d001891a959d260",
+      "frames": 12,
+      "width": 64,
+      "height": 64,
+      "planes_sha256": "d18db7f0b3c593bbbe4396481d011823b862132938941edc1965af093ae68fbd"
+    },
+    {
+      "name": "w3_wp_b_32x32",
+      "input_kind": "fixture-file",
+      "input_path": "tests/fixtures/w3_wp_b_32x32.h264",
+      "input_sha256": "eafec0d49029f2365128631e93fe624ad3d3d66314eb60ad8aed3ab71ecb02ab",
+      "frames": 8,
+      "width": 32,
+      "height": 32,
+      "planes_sha256": "940b155cbd526a5159144980ed9d6e8d3b09c79316e1a133f385133a29a75c40"
+    }
+  ],
+  "errors": [
+    {
+      "name": "empty-input",
+      "input_hex": "",
+      "error_kind": "InvalidMagic"
+    },
+    {
+      "name": "high-profile-sps",
+      "input_hex": "676e000af88880",
+      "error_kind": "Unsupported"
+    },
+    {
+      "name": "truncated-sps-nal",
+      "input_hex": "00000167",
+      "error_kind": "Truncated"
+    }
+  ]
+}

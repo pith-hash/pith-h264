@@ -1,0 +1,271 @@
+# =============================================================================
+# CI Template: pith suite (Rust, multi-SDK).
+# Marker: pith-rust-suite-template v1
+#
+# Suite contract (modhash company-split D1):
+#   - every crate is `pith-<domain>`; the only allowed dependencies are other
+#     pith-* crates (zero third-party dependencies, std only),
+#   - `forbid(unsafe_code)` across the workspace,
+#   - reference.json carries hex-exact test vectors shared across the Python,
+#     Node and Go SDKs; a drifted reference.json fails CI here,
+#   - parser crates ship a `fuzz` feature plus tests/fuzz_corpus.rs replaying
+#     fuzz/corpus/ through the parser; repos with parsers set the
+#     PARSER_CRATES repo variable to opt into the fuzz job.
+# =============================================================================
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  # Per-event, per-ref groups. A newer run only cancels an older run of the SAME
+  # pr/ref/event. event_name is part of the key because events without a PR number
+  # run on the default ref, and without it their group collapses into the
+  # push-to-main group and cancels an in-flight main build.
+  group: >-
+    ${{ format('ci-{0}-{1}-{2}', github.workflow, github.event_name, github.event.pull_request.number || github.ref) }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  readme-sync:
+    name: Verify README registry metadata
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.13"
+      - name: Verify README registry metadata
+        run: python scripts/repo-bootstrap/verify_readme_sync.py --repo-root=.
+
+  # ============================================================================
+  # Matrix: three OSes x (stable + MSRV 1.85). The zero-dependency gate, the
+  # reference-vector check and the coverage gate are part of this job so the
+  # suite contract is enforced on every commit, on every OS.
+  #
+  # The gate script and the coverage tool only need a `python`/`cargo` on PATH;
+  # hosted runners ship both, so the matrix carries no per-OS setup step.
+  # ============================================================================
+  lint-and-test:
+    name: Rust ${{ matrix.rust }} on ${{ matrix.os }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        rust: [stable, "1.85"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable @ 2026-08-05
+        with:
+          toolchain: ${{ matrix.rust }}
+          components: rustfmt, clippy
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: ${{ matrix.rust }}
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Zero-dependency gate (pith-* only)
+        run: python scripts/check-zero-deps.py
+      - name: Run clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Run tests
+        run: cargo test --workspace --locked
+      - name: Reference vectors are current
+        # The gen-reference binary recomputes every vector and compares it
+        # byte-for-byte against the committed reference.json. Suite repos
+        # carry tools/gen-reference; foundation repos run without it until
+        # the binary is ported in, so this gate stays skipped there.
+        if: hashFiles('tools/gen-reference/**') != ''
+        run: cargo run --locked --bin gen-reference -- verify
+      - name: Coverage gate (>= 95% lines)
+        # Measured once per matrix: the gate is a workspace property, not an
+        # OS property. --fail-under-lines exits 1 below the threshold.
+        if: matrix.os == 'ubuntu-latest' && matrix.rust == 'stable'
+        shell: bash
+        run: |
+          cargo install cargo-llvm-cov --locked
+          cargo llvm-cov --workspace --all-targets --fail-under-lines 95
+
+  # ============================================================================
+  # Security audit of the (pith-only) dependency graph. Even an all-pith graph
+  # is audited: a transitive crates.io release under a pith name is still a
+  # supply-chain input.
+  # ============================================================================
+  audit:
+    name: Cargo Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable @ 2026-08-05
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Install cargo-audit
+        # Compiled from source: several minutes on a cold cache. Kept as-is
+        # because this is the exact step measured working in the generic rust
+        # template; swapping in a prebuilt-binary action is a separate,
+        # verifiable change.
+        run: cargo install cargo-audit
+      - name: Security audit
+        run: cargo audit
+
+  # ============================================================================
+  # Fuzz corpus replay for parser crates. Opt-in per repo: set the
+  # PARSER_CRATES repo variable to the space-separated list of workspace
+  # members that ship a `fuzz` feature + tests/fuzz_corpus.rs (e.g.
+  # "pith-png pith-jpeg"). The corpus lives in fuzz/corpus/ so the replay is
+  # deterministic and runs on the stable toolchain -- no nightly, no libFuzzer.
+  # Growing the corpus itself happens locally out-of-band; CI always replays.
+  # ============================================================================
+  fuzz:
+    name: Fuzz Corpus Replay
+    if: vars.PARSER_CRATES != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable @ 2026-08-05
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Replay fuzz corpora
+        shell: bash
+        env:
+          PARSER_CRATES: ${{ vars.PARSER_CRATES }}
+        run: |
+          set -euo pipefail
+          for crate in $PARSER_CRATES; do
+            echo "Replaying fuzz corpus for ${crate}"
+            cargo test --release --locked -p "${crate}" --features fuzz --test fuzz_corpus
+          done
+
+  # ============================================================================
+  # Bot PR governance -- merged from the retired standalone bot-governance.yml
+  # workflow so the standard workflow set is exactly ci.yml + cd.yml.
+  # ============================================================================
+  governance:
+    name: Bot PR Rate Limit & Duplicate Check
+    # Only govern pull requests whose branch lives in this repository.
+    #
+    # Technically: a pull_request run from a fork gets a read-only GITHUB_TOKEN
+    # whatever the permissions block below asks for, and `gh pr close` and
+    # `gh pr comment` are both unguarded under `set -e`, so the job would fail.
+    #
+    # More importantly: what it would be trying to do there is close an
+    # outsider's pull request because somebody else's bot spent the day's rate
+    # limit. Every bot this governs pushes its branch into this repository, so
+    # nothing is lost by not running.
+    #
+    # Comparing head.repo.full_name against the repository asks whether the
+    # branch lives here. head.repo.fork answers a different question — whether
+    # the source repository is itself a fork — which would silently disable
+    # governance for internal branches if this repository ever became one.
+    #
+    # The event_name half keeps this job off push/issues/pull_request_target
+    # runs: the retired workflow triggered on pull_request only, and on
+    # pull_request_target the same check would run with a write token.
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      pull-requests: write
+      contents: read
+    runs-on: ubuntu-latest
+    steps:
+      - name: Detect and govern bot PRs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BRANCH: ${{ github.head_ref }}
+          ACTOR: ${{ github.actor }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          REPO: ${{ github.repository }}
+          BOT_PR_AUTOCLOSE: ${{ vars.BOT_PR_AUTOCLOSE }}
+        run: |
+          set -e
+
+          # Detect if this is a bot-created PR by branch name pattern.
+          # Two signals:
+          #   1. Explicit bot-tool prefixes (Bolt, Palette, Jules, fix/web-scraper)
+          #   2. Any branch ending with a long numeric task/trace ID (-[0-9]{14,})
+          IS_BOT_PR=false
+          if echo "$BRANCH" | grep -qE \
+              '^(bolt[-/]|palette-ux-|fix/web-scraper-|jules[-/])'; then
+            IS_BOT_PR=true
+          elif echo "$BRANCH" | grep -qE -- \
+              '-[0-9]{14,}$'; then
+            IS_BOT_PR=true
+          fi
+
+          if [ "$IS_BOT_PR" = "false" ]; then
+            echo "Not a bot PR ($BRANCH), skipping governance checks."
+            exit 0
+          fi
+
+          echo "Bot PR detected on branch: $BRANCH"
+          gh pr edit "$PR_NUMBER" --add-label "bot-generated" --repo "$REPO" || true
+
+          # --- Rate limit: max 5 bot PRs/actor/day ---
+          SINCE=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || \
+                  date -u -v-24H +%Y-%m-%dT%H:%M:%SZ)
+          COUNT=$(gh pr list --repo "$REPO" --state all --limit 1000 \
+                   --json createdAt,headRefName,author \
+                   --jq "[.[] |
+                          select(.author.login == \"$ACTOR\") |
+                          select(.createdAt > \"$SINCE\") |
+                          select(.headRefName | test(
+                            \"^(bolt[-/]|palette-ux-|fix/web-scraper-|jules[-/])\" +
+                            \"|-[0-9]{14,}$\"
+                          ))] | length" 2>/dev/null || echo 0)
+
+          echo "Bot PRs by $ACTOR in last 24h: $COUNT"
+
+          if [ "${COUNT:-0}" -gt 5 ]; then
+            if [ "${BOT_PR_AUTOCLOSE:-false}" != "true" ]; then
+              gh pr edit "$PR_NUMBER" --repo "$REPO" \
+                --add-label "bot-rate-limit-exceeded" || true
+              echo "Rate limit exceeded ($COUNT/5) but BOT_PR_AUTOCLOSE is not 'true': labelled only."
+              exit 0
+            fi
+            gh pr close "$PR_NUMBER" --repo "$REPO" \
+              --comment "**Bot rate limit exceeded**: $COUNT PRs created in the last 24 hours (limit: 5/day). This PR has been automatically closed to reduce PR backlog and CI resource waste. Please consolidate related fixes."
+            echo "PR #$PR_NUMBER closed: rate limit exceeded ($COUNT/5 today)"
+            exit 0
+          fi
+
+          # --- Duplicate detection by title keyword ---
+          KEYWORD=$(echo "$PR_TITLE" | sed 's/[^a-zA-Z0-9 _-]//g' | \
+                    tr '[:upper:]' '[:lower:]' | cut -c1-50 | xargs)
+          if [ -z "$KEYWORD" ]; then
+            echo "No keyword extracted, skipping duplicate check."
+            exit 0
+          fi
+
+          # --state open on purpose: a closed PR is not a duplicate of an open one.
+          # The rate-limit count above uses --state all because a merged bot PR
+          # still spent the day's budget.
+          DUPES=$(gh pr list --repo "$REPO" --state open --search "$KEYWORD" --limit 1000 \
+                   --json number \
+                   --jq "[.[] | select(.number != $PR_NUMBER)] | length" \
+                   2>/dev/null || echo 0)
+
+          echo "Similar open PRs for '$KEYWORD': $DUPES"
+          if [ "${DUPES:-0}" -ge 1 ]; then
+            gh pr edit "$PR_NUMBER" --repo "$REPO" \
+              --add-label "possible-duplicate" || true
+            gh pr comment "$PR_NUMBER" --repo "$REPO" \
+              --body "**Possible duplicate**: found ${DUPES} open PR(s) with similar title ('${KEYWORD}'). Check before merging: \`gh pr list --search '${KEYWORD}' --state open --limit 1000\`"
+          fi

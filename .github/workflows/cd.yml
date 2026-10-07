@@ -1,0 +1,311 @@
+name: CD
+
+# CD handles:
+#  - Release on workflow_dispatch (release_type=beta, then stable):
+#    better-semantic-release -> tag -> cdylib + SDK artifacts -> opt-in publishes
+#  - Tag push -> SDK artifacts for the tag (manual `git tag v* && git push --tags` flow)
+#
+# A pith repo ships ONE Rust core and THREE SDK packages off the same cdylib:
+#   sdk/python (ctypes wheel)  - gated by vars.PUBLISH_PYPI   (PyPI trusted publishing)
+#   sdk/node   (koffi)         - gated by vars.PUBLISH_NPM    (npm provenance)
+#   sdk/go     (cgo)           - no registry publish; consumers pin the tag,
+#                                so the build job only compiles + tests it.
+# The Rust crate itself is gated by vars.PUBLISH_CRATE.
+#
+# Repo Secrets required:
+#   GITHUB_TOKEN             - built-in
+#   CI_APP_KEY               - n24q02m-ci GitHub App private key (release job: checkout + tag push)
+#
+# Repo Variables required:
+#   CI_APP_ID                - n24q02m-ci GitHub App ID (see this repo's Actions variables)
+
+on:
+  push:
+    branches: [main]
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      release_type:
+        description: "Release type"
+        required: true
+        type: choice
+        options:
+          - beta
+          - stable
+      publish_existing_tag:
+        description: "Recovery only: publish an already-created tag (e.g. v0.1.2), skipping semantic-release. Use when the auto-computed version's tag name is permanently reserved by a GitHub immutable release."
+        required: false
+        type: string
+        default: ""
+
+env:
+  # Release lane: dispatch-only (release_type=beta, then stable); push only feeds tag builds.
+  RELEASE_TYPE: ${{ inputs.release_type }}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cd-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  readme-sync:
+    name: Verify README registry metadata
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.13"
+      - name: Verify README registry metadata
+        run: python scripts/repo-bootstrap/verify_readme_sync.py --repo-root=.
+
+  # ==================== Release (workflow_dispatch) ====================
+  release:
+    name: Semantic Release
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    outputs:
+      released: ${{ steps.release.outputs.released || steps.forced.outputs.released }}
+      tag: ${{ steps.release.outputs.tag || steps.forced.outputs.tag }}
+      version: ${{ steps.release.outputs.version || steps.forced.outputs.version }}
+      is_prerelease: ${{ steps.release.outputs.is_prerelease || steps.forced.outputs.is_prerelease }}
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+      - name: Generate GitHub App Token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ vars.CI_APP_ID }}
+          private-key: ${{ secrets.CI_APP_KEY }}
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
+      # Version bump runs on the fork (orphan-tag + registry-collision guards).
+      # The publish steps below stay upstream — the fork does not replace them.
+      - id: release
+        uses: n24q02m/better-semantic-release@087b84e8d2ba75bdec350924d3bf8247088e0b1a # v1.4.0
+        if: inputs.publish_existing_tag == ''
+        with:
+          github_token: ${{ steps.app-token.outputs.token }}
+          # Not optional: without it the run silently falls back to defaults and
+          # ignores tag_format / allow_zero_version / major_on_zero. That does not
+          # fail the job -- it publishes a wrong version number.
+          config_file: semantic-release.toml
+          prerelease: ${{ env.RELEASE_TYPE == 'beta' }}
+          prerelease_token: beta
+      - if: inputs.publish_existing_tag == '' && steps.release.outputs.released == 'true'
+        uses: python-semantic-release/publish-action@5a5718ce47b892ef699f2972dae122297771d641 # v10.6.1
+        with:
+          github_token: ${{ steps.app-token.outputs.token }}
+          tag: ${{ steps.release.outputs.tag }}
+      - name: Use existing tag (immutable-release recovery)
+        id: forced
+        if: inputs.publish_existing_tag != ''
+        run: |
+          TAG="${{ inputs.publish_existing_tag }}"
+          VERSION="${TAG#v}"
+          {
+            echo "released=true"
+            echo "tag=$TAG"
+            echo "version=$VERSION"
+            echo "is_prerelease=false"
+          } >> "$GITHUB_OUTPUT"
+
+  # ==================== Build ====================
+  # One cdylib per OS plus the SDK artifacts that wrap it, on every tag build.
+  # Cross-language commands here (pip, npm, go) are the pith suite's whole
+  # point: this language variant builds the Python/Node/Go SDKs off the Rust
+  # core, unlike the single-language per-language templates.
+  build:
+    name: Build SDK Artifacts (${{ matrix.os }})
+    if: |
+      !cancelled() && needs.release.result != 'failure' && (
+        startsWith(github.ref, 'refs/tags/v') ||
+        (github.event_name == 'workflow_dispatch' && needs.release.outputs.released == 'true')
+      )
+    needs: [release]
+    runs-on: ubuntu-latest
+    env:
+      # Where cargo drops the cdylib. Kept in one place so the SDK build steps
+      # below never hardcode a toolchain-internal directory name.
+      PITH_CDYLIB_DIR: target/release
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.release.outputs.tag || github.ref }}
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable @ 2026-08-05
+      - name: Build the core cdylib
+        # --locked for the same reason ci.yml uses it on clippy and test: without it
+        # cargo is free to re-resolve, so the SDK binaries attached to the release are
+        # built against a dependency set CI never ran.
+        run: cargo build --workspace --release --locked
+      - name: Regenerate reference.json (hex-exact vectors)
+        # Written next to the artifacts so every SDK package ships byte-identical
+        # vectors; the committed copy is verified in ci.yml.
+        run: cargo run --locked --bin gen-reference -- gen
+      - name: Collect cdylibs for the SDKs
+        shell: bash
+        run: |
+          mkdir -p dist/sdk
+          find "$PITH_CDYLIB_DIR" -maxdepth 1 -type f \
+            \( -name '*.so' -o -name '*.dylib' -o -name '*.dll' \) \
+            -exec cp {} dist/sdk/ \;
+          ls -la dist/sdk
+      - name: Build the Python wheel (ctypes)
+        # sdk/python's build backend copies the cdylib from PITH_CDYLIB_DIR into
+        # the wheel. Wheels are OS-specific, so this runs inside the matrix;
+        # publish-pypi uploads the three wheels together. Wheels only: a plain
+        # sdist cannot carry the binary and is not shipped.
+        shell: bash
+        run: |
+          python -m pip install --upgrade build
+          python -m build --wheel sdk/python
+      - name: Smoke the Go binding (cgo)
+        # sdk/go compiles against the freshly built cdylib; go.mod carries the
+        # module's own cgo flags, the env below only points the linker at the
+        # build output.
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: sdk/go/go.mod
+      - name: Go build and test
+        shell: bash
+        run: |
+          cd sdk/go
+          CGO_ENABLED=1 go build ./...
+          CGO_ENABLED=1 go test ./...
+      - name: Upload SDK artifacts
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: sdk-${{ matrix.os }}
+          path: |
+            dist/sdk/
+            sdk/python/dist/
+            reference.json
+      - name: Attach build output to the release
+        if: vars.PUBLISH_RELEASE_ASSET == 'true'
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        with:
+          tag_name: ${{ needs.release.outputs.tag || github.ref_name }}
+          files: |
+            dist/sdk/*
+            reference.json
+
+  # ==================== Publish crate ====================
+  publish-crate:
+    name: Publish to crates.io
+    needs: [readme-sync, release, build]
+    # `!cancelled()` switches off the implicit "every need succeeded" gate, so
+    # each dependency this job actually relies on has to be named here or it is
+    # only decorative. readme-sync is named for that reason: a crates.io version
+    # is permanent, and yanking it does not take the wrong README back down.
+    if: |
+      !cancelled() && needs.build.result == 'success' &&
+      needs.readme-sync.result == 'success' &&
+      vars.PUBLISH_CRATE == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.release.outputs.tag || github.ref }}
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable @ 2026-08-05
+      - name: Publish
+        # A crates.io version cannot be replaced, only yanked. Without --locked the
+        # artifact that goes up is built against a resolution CI never tested.
+        run: cargo publish --workspace --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  # ==================== Publish Python SDK ====================
+  publish-pypi:
+    name: Publish Python SDK to PyPI
+    needs: [readme-sync, release, build]
+    if: |
+      !cancelled() && needs.build.result == 'success' &&
+      needs.readme-sync.result == 'success' &&
+      vars.PUBLISH_PYPI == 'true'
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+      - name: Download SDK artifacts from all three OSes
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        with:
+          pattern: sdk-*
+          merge-multiple: true
+          path: wheelhouse
+      - name: Check wheels
+        run: |
+          python -m pip install --upgrade twine
+          twine check wheelhouse/*.whl
+      - name: Publish to PyPI
+        # OIDC trusted publishing -- no PyPI token is stored on the repo.
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
+        with:
+          packages-dir: wheelhouse
+
+  # ==================== Publish Node SDK ====================
+  publish-npm:
+    name: Publish Node SDK to npm
+    needs: [readme-sync, release, build]
+    if: |
+      !cancelled() && needs.build.result == 'success' &&
+      needs.readme-sync.result == 'success' &&
+      vars.PUBLISH_NPM == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+      - name: Download SDK artifacts from all three OSes
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        with:
+          pattern: sdk-*
+          merge-multiple: true
+          path: sdk-dist
+      - name: Assemble the npm package with prebuilt cdylibs
+        shell: bash
+        run: |
+          mkdir -p sdk/node/prebuilds
+          cp sdk-dist/dist/sdk/* sdk/node/prebuilds/
+          cp sdk-dist/reference.json sdk/node/
+          cd sdk/node
+          npm ci
+          # OIDC provenance -- no npm token is stored on the repo.
+          npm publish --provenance --no-git-checks --tag "${{ needs.release.outputs.is_prerelease == 'true' && 'beta' || 'latest' }}"

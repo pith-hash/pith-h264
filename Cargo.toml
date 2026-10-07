@@ -1,0 +1,32 @@
+[package]
+name = "pith-h264"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "Apache-2.0"
+repository = "https://github.com/pith-hash/pith-h264"
+homepage = "https://github.com/pith-hash/pith-h264"
+description = "H.264/AVC subset decoding: NAL/SPS/PPS, CAVLC+CABAC slices, transforms, in-loop deblocking"
+readme = "README.md"
+categories = ["algorithms", "cryptography"]
+keywords = ["h264", "avc", "video", "decoder", "hashing"]
+
+[dependencies]
+pith-digest = { git = "https://github.com/pith-hash/pith-digest.git", branch = "main" }
+
+
+# Vector generator: regenerates reference.json (CI verifies it is current,
+# CD ships it with the SDK artifacts).
+[[bin]]
+name = "gen-reference"
+path = "tools/gen-reference/main.rs"
+
+# Ported from the upstream kit: hostile-input tests (bitflip fuzz over a
+# 1 KiB stream x 8192 flips, CAVLC decode of every fixture) under -O0 are
+# unrealistically slow.
+[profile.test]
+opt-level = 2
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "deny"
