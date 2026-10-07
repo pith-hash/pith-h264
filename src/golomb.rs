@@ -152,3 +152,30 @@ impl<'a> Br<'a> {
         }
     }
 }
+
+#[cfg(test)]
+mod br_edge_tests {
+    use super::*;
+
+    #[test]
+    fn peek_rejects_over_32_bits() {
+        let br = Br::new(&[0xffu8; 8]);
+        assert!(br.peek(33).is_err());
+        assert!(br.peek(32).is_ok());
+    }
+
+    #[test]
+    fn byte_read_requires_alignment() {
+        let mut br = Br::new(&[0xabu8; 4]);
+        assert!(br.byte().is_ok());
+        // consume one bit -> unaligned
+        let _ = br.bit();
+        assert!(br.byte().is_err());
+    }
+
+    #[test]
+    fn ue_prefix_over_31_zeros_rejects() {
+        let mut br = Br::new(&[0x00u8; 8]);
+        assert!(br.ue().is_err());
+    }
+}

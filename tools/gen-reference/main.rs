@@ -274,3 +274,19 @@ mod tests {
         assert_eq!(run(""), ExitCode::SUCCESS);
     }
 }
+
+#[cfg(test)]
+mod gen_mode_tests {
+    use super::*;
+
+    /// `gen` rewrites reference.json byte-identically: deterministic
+    /// corpus, stable digest — the CD gate's no-drift contract.
+    #[test]
+    fn gen_rewrites_identical_bytes() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let before = fs::read(root.join(REFERENCE_PATH)).unwrap();
+        assert_eq!(run("gen"), ExitCode::SUCCESS);
+        let after = fs::read(root.join(REFERENCE_PATH)).unwrap();
+        assert_eq!(before, after);
+    }
+}

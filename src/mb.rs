@@ -604,8 +604,33 @@ mod tests {
                 Ok(MbType::B16x16 { dirs: d }) if u32::from(d) == dirs
             ));
         }
-        // 16x8 geometry (4x2) with the full 13-entry direction-pair
-        // order (codes 4, 8..21), and 8x16 (2x4) codes 5, 9.. etc.
+        // Exhaustive: every code 0..=48 decodes; the full 13-entry
+        // direction-pair order for both 16x8 (4x2) and 8x16 (2x4)
+        // geometries.
+        for code in 0..=48u32 {
+            assert!(MbType::b_slice(code).is_ok(), "code {code}");
+        }
+        for (code, g) in [
+            (5, (2, 4)),
+            (6, (4, 2)),
+            (7, (2, 4)),
+            (9, (2, 4)),
+            (10, (4, 2)),
+            (11, (2, 4)),
+            (13, (2, 4)),
+            (14, (4, 2)),
+            (15, (2, 4)),
+            (16, (4, 2)),
+            (17, (2, 4)),
+            (18, (4, 2)),
+            (19, (2, 4)),
+        ] {
+            let d0 = match MbType::b_slice(code) {
+                Ok(MbType::BPart { p0, .. }) => (p0.0, p0.1),
+                other => panic!("code {code}: {other:?}"),
+            };
+            assert_eq!(d0, g, "code {code} geometry");
+        }
         assert!(matches!(
             MbType::b_slice(4),
             Ok(MbType::BPart {

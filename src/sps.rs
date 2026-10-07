@@ -477,3 +477,26 @@ mod tests {
         assert!(crop(0, 0, 0, 0).is_ok());
     }
 }
+// (profile_name coverage lives in the tests module above.)
+
+#[cfg(test)]
+mod profile_name_tests {
+    use super::profile_name;
+
+    #[test]
+    fn every_profile_names_itself() {
+        assert_eq!(profile_name(66), "Baseline");
+        assert_eq!(profile_name(77), "Main");
+        assert_eq!(profile_name(88), "Extended");
+        assert_eq!(profile_name(100), "High");
+        assert_eq!(profile_name(110), "High 10");
+        assert_eq!(profile_name(122), "High 4:2:2");
+        assert_eq!(profile_name(244), "High 4:4:4");
+        assert_eq!(profile_name(44), "CAVLC 4:4:4 Intra");
+        assert_eq!(profile_name(83), "Scalable Baseline");
+        assert_eq!(profile_name(86), "Scalable High");
+        assert_eq!(profile_name(118), "Multiview High");
+        assert_eq!(profile_name(128), "Stereo High");
+        assert_eq!(profile_name(999), "Unknown");
+    }
+}

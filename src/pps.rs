@@ -141,3 +141,73 @@ pub(crate) fn parse(payload: &[u8]) -> Result<Pps> {
         transform_8x8_mode,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct W {
+        bits: alloc::vec::Vec<u8>,
+    }
+
+    impl W {
+        fn bit(&mut self, b: u8) {
+            self.bits.push(b & 1);
+        }
+        fn ue(&mut self, v: u32) {
+            let vp1 = v + 1;
+            let n = 31 - vp1.leading_zeros();
+            for _ in 0..n {
+                self.bit(0);
+            }
+            for i in (0..=n).rev() {
+                self.bit(((vp1 >> i) & 1) as u8);
+            }
+        }
+        fn se(&mut self, v: i32) {
+            let m = if v <= 0 {
+                (-v * 2) as u32
+            } else {
+                (v * 2 - 1) as u32
+            };
+            self.ue(m);
+        }
+    }
+
+    fn pps_with(id: u32, sps: u32, qp: i32, chroma: i32) -> Result<Pps> {
+        let mut w = W {
+            bits: alloc::vec::Vec::new(),
+        };
+        w.ue(id);
+        w.ue(sps);
+        w.bit(0); // entropy cabac
+        w.bit(0); // bottom field pic order
+        w.ue(0); // slice groups -1
+        w.ue(0); // l0 -1
+        w.ue(0); // l1 -1
+        w.bit(0); // weighted pred
+        w.bit(0);
+        w.bit(0); // weighted bipred
+        w.se(qp); // pic_init_qp
+        w.se(0); // pic_init_qs
+        w.se(chroma);
+        w.bit(0);
+        w.bit(0);
+        w.bit(0);
+        let mut b = alloc::vec![0u8; w.bits.len().div_ceil(8)];
+        for (i, &bit) in w.bits.iter().enumerate() {
+            b[i / 8] |= bit << (7 - i % 8);
+        }
+        b.push(0x80);
+        parse(&b)
+    }
+
+    #[test]
+    fn pps_field_bounds_reject() {
+        assert!(pps_with(256, 0, 0, 0).is_err());
+        assert!(pps_with(0, 32, 0, 0).is_err());
+        assert!(pps_with(0, 0, -30, 0).is_err());
+        assert!(pps_with(0, 0, 0, 13).is_err());
+        assert!(pps_with(0, 0, 0, 0).is_ok());
+    }
+}
