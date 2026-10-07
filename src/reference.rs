@@ -124,9 +124,12 @@ mod tests {
         // The digest contract: planes_sha256 covers the tail only.
         use pith_digest::sha256;
         let hashed = sha256(&tail).expect("sha256 of planes");
-        let hex = |bytes: &[u8]| bytes.iter().map(|b| format!("{b:02x}")).collect::<String>();
+        let mut hex = String::with_capacity(hashed.as_bytes().len() * 2);
+        for b in hashed.as_bytes() {
+            hex.push_str(&format!("{b:02x}"));
+        }
         assert_eq!(
-            hex(hashed.as_bytes()),
+            hex,
             "524961aab71df0b48291ed8507c78051cde1dad5ec6e305fdd083e7667726519"
         );
     }
