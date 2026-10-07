@@ -40,13 +40,6 @@ impl Bw {
         };
         self.ue(m);
     }
-    fn te(&mut self, range: u32, v: u32) {
-        if range == 1 {
-            self.bit(1 - v as u8);
-        } else {
-            self.ue(v);
-        }
-    }
     /// Zero-pad to the next byte boundary (I_PCM sample alignment).
     fn align_zero(&mut self) {
         while self.bits.len() % 8 != 0 {
@@ -58,7 +51,7 @@ impl Bw {
         self.align_zero();
         for _ in 0..count {
             for i in (0..8).rev() {
-                self.bit((byte >> i) as u8 & 1);
+                self.bit((byte >> i) & 1);
             }
         }
     }
@@ -419,16 +412,15 @@ fn b_slice_inter_arms() {
     // slice would need 16 mb entries — keep 8-MB coverage via slice
     // prefix (first_mb=0..8) and accept clean errors beyond picture
     // bounds: parse arms execute regardless.
-    match decode(&s) {
-        Ok(frames) => assert!(frames.len() >= 2),
-        Err(_) => {}
+    if let Ok(frames) = decode(&s) {
+        assert!(frames.len() >= 2);
     }
 
     // Deep B-partition sweep: all codes 4..=21 in one frame.
     let mut s = base();
     let codes: Vec<(u32, u32)> = (4..=21)
         .map(|c| (c, 0))
-        .chain(core::iter::repeat((4, 0)).take(2))
+        .chain(std::iter::repeat_n((4, 0), 2))
         .collect();
     s.extend_from_slice(&b_frame(&codes));
     let _ = decode(&s);
