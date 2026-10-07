@@ -1,0 +1,33 @@
+{
+  "name": "@pith-hash/pith-h264",
+  "version": "0.1.0",
+  "description": "H.264/AVC baseline-subset decoding SDK: Annex-B NAL/SPS/PPS, CAVLC slices, in-loop deblocking via the pith-h264 Rust cdylib (koffi, prebuilt)",
+  "license": "MIT",
+  "main": "index.js",
+  "files": [
+    "index.js",
+    "prebuilds/",
+    "reference.json"
+  ],
+  "scripts": {
+    "test": "node --test"
+  },
+  "dependencies": {
+    "koffi": "^2.12.0"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pith-hash/pith-h264.git",
+    "directory": "sdk/node"
+  },
+  "keywords": [
+    "h264",
+    "avc",
+    "video",
+    "decoder",
+    "hashing"
+  ]
+}

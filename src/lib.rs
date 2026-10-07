@@ -10,6 +10,10 @@
 //! this suite builds without a single registry package, so the
 //! whole suite resolves offline.
 //!
+//! The crate is `no_std` apart from the `alloc` [`Vec`] its API
+//! returns; the `std` feature (on by default) links `std` so the
+//! `cdylib` the language SDKs bind through carries a panic handler.
+//!
 //! # Scope
 //!
 //! The decoder accepts Baseline-profile streams (`profile_idc` 66) and
@@ -39,8 +43,11 @@
 //! output is the reconstructed picture as decoded, with frame cropping
 //! applied per SPS.
 
-#![no_std]
-#![forbid(unsafe_code)]
+#![cfg_attr(not(feature = "std"), no_std)]
+// `unsafe` is denied everywhere except `ffi`, the C ABI surface the
+// language SDKs bind through: raw pointers exist only at that boundary,
+// and every exported function is a documented `unsafe extern "C"` fn.
+#![deny(unsafe_code)]
 #![deny(missing_docs)]
 
 extern crate alloc;
@@ -61,6 +68,9 @@ mod slice;
 mod sps;
 mod tables;
 mod transform;
+
+pub mod ffi;
+pub mod reference;
 
 use alloc::vec::Vec;
 

@@ -62,3 +62,7 @@ docs/superpowers/
 
 
 /target/
+
+# Python SDK build scaffolding
+sdk/python/build/
+*.egg-info/

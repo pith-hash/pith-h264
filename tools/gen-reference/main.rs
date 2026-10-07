@@ -52,14 +52,13 @@ pub(crate) fn measure(stream: &[u8]) -> Decoded {
     assert!(!frames.is_empty(), "fixture must yield frames");
     let width = frames[0].width;
     let height = frames[0].height;
-    let mut planes: Vec<u8> = Vec::new();
     for f in &frames {
         assert_eq!(f.width, width, "fixture frame width must be constant");
         assert_eq!(f.height, height, "fixture frame height must be constant");
-        planes.extend_from_slice(&f.y);
-        planes.extend_from_slice(&f.cb);
-        planes.extend_from_slice(&f.cr);
     }
+    // The aggregation lives in the crate (`pith_h264::reference`), shared
+    // with the FFI surface: one serialization, one digest contract.
+    let planes = pith_h264::reference::planes(&frames);
     Decoded {
         frames: frames.len(),
         width,

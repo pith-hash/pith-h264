@@ -521,3 +521,121 @@ fn inter_with_marking_edges() {
     // leaves the DPB exercises displacement paths.
     let _ = decode(&s);
 }
+
+/// P-slice header prefix shared by the error-injection tests: after
+/// `first_mb`, slice type, pps id, frame_num and poc_lsb.
+fn p_header(w: &mut Bw, first_mb: u32) {
+    w.ue(first_mb);
+    w.ue(5); // P slice (all MBs)
+    w.ue(0); // pps
+    w.bits(1, 4); // frame_num u(4)
+    w.bits(0, 4); // poc_lsb u(4)
+}
+
+/// Tail of a P-slice header: ref-list and marking switches plus qp.
+fn p_header_tail(w: &mut Bw, ref_idx_override: Option<u32>) {
+    match ref_idx_override {
+        Some(active_minus1) => {
+            w.bit(1); // num_ref_idx override present
+            w.ue(active_minus1);
+        }
+        None => w.bit(0),
+    }
+    w.bit(0); // ref_pic_list_modification absent
+    w.bit(0); // no adaptive ref marking
+    w.se(0); // qp delta
+}
+
+/// `first_mb_in_slice` past the picture is a named refusal, not a
+/// wraparound or a panic.
+#[test]
+fn first_mb_past_picture_is_refused() {
+    let mut s = sps(0);
+    s.extend_from_slice(&pps());
+    s.extend_from_slice(&idr(0));
+    let mut w = Bw::default();
+    p_header(&mut w, 17); // 4x4 MBs = 16, so 17 is past the picture
+    p_header_tail(&mut w, None);
+    s.extend_from_slice(&nal(0x41, &w.rbsp()));
+    let err = decode(&s).expect_err("first_mb past picture must refuse");
+    assert!(
+        err.to_string().contains("first_mb_in_slice past picture"),
+        "{err}"
+    );
+}
+
+/// A P slice with no reference picture in the DPB names the missing
+/// list entry instead of decoding against garbage.
+#[test]
+fn p_slice_without_references_is_refused() {
+    let mut s = sps(0);
+    s.extend_from_slice(&pps());
+    // No IDR: the DPB is empty.
+    let mut w = Bw::default();
+    p_header(&mut w, 0);
+    p_header_tail(&mut w, None);
+    s.extend_from_slice(&nal(0x41, &w.rbsp()));
+    let err = decode(&s).expect_err("P slice without refs must refuse");
+    assert!(
+        err.to_string().contains("ref list index out of range"),
+        "{err}"
+    );
+}
+
+/// `ref_idx_l0` is coded when more than one entry is active, and a
+/// coded index past the (padded) list is a named refusal.
+#[test]
+fn ref_idx_l0_out_of_list_is_refused() {
+    let mut s = sps(0);
+    s.extend_from_slice(&pps());
+    s.extend_from_slice(&idr(0));
+    let mut w = Bw::default();
+    p_header(&mut w, 0);
+    p_header_tail(&mut w, Some(2)); // l0 active = 3 (padded from 1 ref)
+    w.ue(0); // mb_skip_run 0
+    w.ue(0); // P_L0_16x16
+    w.ue(5); // ref_idx_l0: te(2) is ue-coded, 5 >= 3 active
+    s.extend_from_slice(&nal(0x41, &w.rbsp()));
+    let err = decode(&s).expect_err("ref_idx_l0 past the list must refuse");
+    assert!(err.to_string().contains("ref_idx_l0 out of list"), "{err}");
+}
+
+/// Same refusal for both B lists: `ref_idx_l0` and `ref_idx_l1`
+/// coded past the padded three-entry lists.
+#[test]
+fn b_ref_idx_out_of_lists_is_refused() {
+    let b_frame = |mb_type: u32, big_ref: u32| -> Vec<u8> {
+        let mut w = Bw::default();
+        w.ue(0); // first_mb
+        w.ue(6); // B slice (all MBs)
+        w.ue(0); // pps
+        w.bits(1, 4); // frame_num u(4)
+        w.bits(0, 4); // poc_lsb u(4)
+        w.bit(0); // direct_spatial_mv_predict (temporal)
+        w.bit(1); // num_ref_idx override present (one flag, both lists)
+        w.ue(2); // l0 active = 3
+        w.ue(2); // l1 active = 3
+        w.bit(0); // list modification absent (l0)
+        w.bit(0); // list modification absent (l1)
+        w.bit(0); // no adaptive ref marking
+        w.se(0); // qp delta
+        w.ue(0); // mb_skip_run 0
+        w.ue(mb_type); // B_L0_16x16 (1) / B_L1_16x16 (2)
+        w.ue(big_ref); // ref_idx: te(2) is ue-coded, 5 >= 3 active
+        nal(0x41, &w.rbsp())
+    };
+
+    let mut s = sps(0);
+    s.extend_from_slice(&pps());
+    s.extend_from_slice(&idr(0));
+    s.extend_from_slice(&b_frame(1, 5));
+    let err = decode(&s).expect_err("B ref_idx_l0 past the list must refuse");
+    assert!(err.to_string().contains("ref_idx_l0 out of list"), "{err}");
+
+    let mut s = sps(0);
+    s.extend_from_slice(&pps());
+    s.extend_from_slice(&idr(0));
+    s.extend_from_slice(&b_frame(2, 5));
+    let err = decode(&s).expect_err("B ref_idx_l1 past the list must refuse");
+    assert!(err.to_string().contains("ref_idx_l1 out of list"), "{err}");
+}

@@ -320,6 +320,47 @@ mod tests {
         parse(&b)
     }
 
+    /// An Extended-profile (88) SPS parses with the baseline syntax
+    /// subset and carries the profile name through.
+    #[test]
+    fn extended_profile_parses_as_extended() {
+        let sps = sps_with(88, |w| {
+            w.ue(0); // log2_max_frame_num_minus4
+            w.ue(0); // poc type 0
+            w.ue(0); // log2_max_poc_lsb_minus4
+            w.ue(1); // max_num_ref_frames
+            w.bit(0); // gaps allowed
+            w.ue(3); // width in MBs - 1 (4)
+            w.ue(3); // height in MBs - 1 (4)
+            w.bit(1); // frame mbs only
+            w.bit(1); // direct 8x8
+            w.bit(0); // no crop
+            w.bit(0); // no vui
+        })
+        .expect("extended-profile SPS must parse");
+        assert!(matches!(sps.profile, Profile::Extended));
+        assert_eq!(sps.profile_idc, 88);
+    }
+
+    /// `num_ref_frames_in_pic_order_cnt_cycle` indexes a per-SPS
+    /// offset table, so a count over 255 is a named refusal.
+    #[test]
+    fn pic_order_cycles_over_255_refused() {
+        let err = sps_with(66, |w| {
+            w.ue(0); // log2_max_frame_num_minus4
+            w.ue(1); // poc type 1
+            w.bit(0); // delta_pic_order_always_zero
+            w.se(0); // offset_for_non_ref_pic
+            w.se(0); // offset_for_top_to_bottom
+            w.ue(256); // cycles over the 255 cap
+        })
+        .expect_err("cycles over 255 must be refused");
+        assert!(matches!(
+            err,
+            Error::BadValue("num_ref_frames_in_pic_order_cnt_cycle over 255")
+        ));
+    }
+
     #[test]
     fn high_profile_extension_arms() {
         // chroma_format_idc != 1 named refusal.

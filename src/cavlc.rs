@@ -286,3 +286,22 @@ pub(crate) fn raster_index(kind: BlockKind, scan_pos: usize) -> usize {
         BlockKind::ChromaDc => crate::tables::SCAN_2X2[scan_pos] as usize,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `level_prefix` refuses prefixes beyond [`MAX_LEVEL_PREFIX`]
+    /// instead of decoding an astronomically large level: a long run
+    /// of zero bits with no terminating 1 is stream corruption.
+    #[test]
+    fn level_prefix_over_28_is_refused() {
+        // 64 zero bits: the terminating 1 never arrives, so the
+        // prefix counter crosses the cap while bits remain.
+        let mut br = Br::new(&[0u8; 8]);
+        assert!(matches!(
+            level_prefix(&mut br),
+            Err(Error::BadValue("h264 CAVLC: level_prefix over 28"))
+        ));
+    }
+}

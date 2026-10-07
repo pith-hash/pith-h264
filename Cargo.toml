@@ -11,6 +11,17 @@ readme = "README.md"
 categories = ["algorithms", "cryptography"]
 keywords = ["h264", "avc", "video", "decoder", "hashing"]
 
+[lib]
+# The cdylib is the binary every language SDK binds through (ctypes,
+# koffi, cgo); the rlib keeps the Rust consumers unchanged.
+crate-type = ["cdylib", "rlib"]
+
+[features]
+# Default-on: the cdylib needs std for its panic handler. The library
+# itself stays no_std-compatible (`--no-default-features` still builds).
+default = ["std"]
+std = []
+
 [dependencies]
 pith-digest = { git = "https://github.com/pith-hash/pith-digest.git", branch = "main" }
 
@@ -27,6 +38,10 @@ path = "tools/gen-reference/main.rs"
 [profile.test]
 opt-level = 2
 
+# `unsafe_code` is denied at the crate root (`#![deny(unsafe_code)]` in
+# src/lib.rs), with the single `#![allow(unsafe_code)]` confined to
+# src/ffi.rs, the C ABI surface. It cannot live here: `[lints]` entries
+# become command-line flags, and command-line lints cannot be
+# re-allowed by inner attributes.
 [lints.rust]
-unsafe_code = "forbid"
 missing_docs = "deny"
