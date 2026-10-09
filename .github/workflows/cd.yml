@@ -262,15 +262,20 @@ jobs:
           pattern: sdk-*
           merge-multiple: true
           path: wheelhouse
+      - name: Collect wheels
+        run: |
+          mkdir -p wheelhouse-flat
+          find wheelhouse -name '*.whl' -exec cp {} wheelhouse-flat/ \;
+          ls -la wheelhouse-flat/
       - name: Check wheels
         run: |
           python -m pip install --upgrade twine
-          twine check wheelhouse/*.whl
+          twine check wheelhouse-flat/*.whl
       - name: Publish to PyPI
         # OIDC trusted publishing -- no PyPI token is stored on the repo.
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
         with:
-          packages-dir: wheelhouse
+          packages-dir: wheelhouse-flat
 
   # ==================== Publish Node SDK ====================
   publish-npm:
