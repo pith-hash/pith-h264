@@ -178,6 +178,15 @@ jobs:
         run: |
           python -m pip install --upgrade build
           python -m build --wheel sdk/python
+      - name: Repair Linux wheel to manylinux
+        # PyPI rejects the bare linux_x86_64 platform tag; auditwheel rewrites it
+        # to manylinux_2_17_x86_64 and bundles the cdylib it depends on.
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          python -m pip install --upgrade auditwheel
+          auditwheel repair sdk/python/dist/*.whl -w sdk/python/dist-manylinux
+          mv sdk/python/dist-manylinux/*.whl sdk/python/dist/
       - name: Smoke the Go binding (cgo)
         # sdk/go compiles against the freshly built cdylib; go.mod carries the
         # module's own cgo flags, the env below only points the linker at the
