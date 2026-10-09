@@ -274,7 +274,7 @@ jobs:
       - name: Collect wheels
         run: |
           mkdir -p wheelhouse-flat
-          find wheelhouse -name '*.whl' ! -name '*linux_*' -exec cp {} wheelhouse-flat/ \;
+          find wheelhouse -name '*.whl' ! -name '*-linux_*' -exec cp {} wheelhouse-flat/ \;
           ls -la wheelhouse-flat/
       - name: Check wheels
         run: |
