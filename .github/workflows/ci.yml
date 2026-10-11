@@ -56,10 +56,14 @@ jobs:
   #
   # The gate script and the coverage tool only need a `python`/`cargo` on PATH;
   # hosted runners ship both, so the matrix carries no per-OS setup step.
+  #
+  # `runs-on` MUST be the matrix value. It used to be the repo's default runner, so
+  # the macOS and Windows legs were Linux runs with different names and nothing in
+  # the suite had ever been compiled on either OS.
   # ============================================================================
   lint-and-test:
     name: Rust ${{ matrix.rust }} on ${{ matrix.os }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -94,11 +98,99 @@ jobs:
       - name: Coverage gate (>= 95% lines)
         # Measured once per matrix: the gate is a workspace property, not an
         # OS property. --fail-under-lines exits 1 below the threshold.
-        if: matrix.os == 'ubuntu-latest' && matrix.rust == 'stable'
+        if: runner.os == 'Linux' && matrix.rust == 'stable'
         shell: bash
         run: |
           cargo install cargo-llvm-cov --locked
-          cargo llvm-cov --workspace --all-targets --fail-under-lines 95
+          cargo llvm-cov --workspace --all-targets --locked --fail-under-lines 95
+
+  # ============================================================================
+  # SDK legs: build the cdylib once per OS and run the Python, Node, Go (cgo) and
+  # Java test suites against it. cd.yml only exercised these at release time, so a
+  # broken binding was found by a publish, not by a pull request.
+  #
+  # Which SDKs a repo has is read from the tree (pith-h264 has no sdk/ at all and
+  # png..cdc have no sdk/java); a missing SDK is skipped, never failed. Every SDK
+  # finds the cdylib through PITH_CDYLIB_DIR, which must be absolute because the
+  # tests run from inside each sdk/<lang> directory.
+  # ============================================================================
+  sdk:
+    name: SDK tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        # The Windows leg defaults to pwsh, which cannot run these POSIX bodies.
+        shell: bash
+    env:
+      PITH_CDYLIB_DIR: ${{ github.workspace }}/target/release
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Detect which SDKs this repo has
+        id: detect
+        run: |
+          {
+            for sdk in python:pyproject.toml node:package.json go:go.mod java:pom.xml; do
+              lang="${sdk%%:*}"
+              file="${sdk#*:}"
+              if [ -f "sdk/$lang/$file" ]; then
+                echo "has_$lang=true"
+              else
+                echo "has_$lang=false"
+              fi
+            done
+          } >> "$GITHUB_OUTPUT"
+      - name: Install Rust toolchain
+        if: steps.detect.outputs.has_python == 'true' || steps.detect.outputs.has_node == 'true' || steps.detect.outputs.has_go == 'true' || steps.detect.outputs.has_java == 'true'
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable @ 2026-08-05
+      - name: Cache cargo
+        if: steps.detect.outputs.has_python == 'true' || steps.detect.outputs.has_node == 'true' || steps.detect.outputs.has_go == 'true' || steps.detect.outputs.has_java == 'true'
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Build the core cdylib
+        if: steps.detect.outputs.has_python == 'true' || steps.detect.outputs.has_node == 'true' || steps.detect.outputs.has_go == 'true' || steps.detect.outputs.has_java == 'true'
+        run: cargo build --workspace --release --locked
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        if: steps.detect.outputs.has_python == 'true'
+        with:
+          python-version: "3.13"
+      - name: Python SDK tests
+        if: steps.detect.outputs.has_python == 'true'
+        run: |
+          python -m pip install --upgrade pytest
+          python -m pip install ./sdk/python
+          python -m pytest sdk/python
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        if: steps.detect.outputs.has_node == 'true'
+        with:
+          node-version: "24"
+      - name: Node SDK tests
+        if: steps.detect.outputs.has_node == 'true'
+        run: |
+          cd sdk/node
+          npm ci
+          npm test
+      - name: Set up Go for the cgo binding
+        if: steps.detect.outputs.has_go == 'true'
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: sdk/go/go.mod
+      - name: Go SDK tests
+        if: steps.detect.outputs.has_go == 'true'
+        run: |
+          cd sdk/go
+          CGO_ENABLED=1 go test ./...
+      - name: Set up Java for the JNI binding
+        if: steps.detect.outputs.has_java == 'true'
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Java SDK tests
+        if: steps.detect.outputs.has_java == 'true'
+        run: mvn -B test -f sdk/java/pom.xml
 
   # ============================================================================
   # Security audit of the (pith-only) dependency graph. Even an all-pith graph
