@@ -5,16 +5,26 @@ name: CD
 #    better-semantic-release -> tag -> cdylib + SDK artifacts -> opt-in publishes
 #  - Tag push -> SDK artifacts for the tag (manual `git tag v* && git push --tags` flow)
 #
-# A pith repo ships ONE Rust core and THREE SDK packages off the same cdylib:
+# A pith repo ships ONE Rust core and up to FOUR SDK packages off the same cdylib:
 #   sdk/python (ctypes wheel)  - gated by vars.PUBLISH_PYPI   (PyPI trusted publishing)
 #   sdk/node   (koffi)         - gated by vars.PUBLISH_NPM    (npm provenance)
+#   sdk/java   (JNI)           - gated by vars.PUBLISH_MAVEN  (Maven Central Portal)
 #   sdk/go     (cgo)           - no registry publish; consumers pin the tag,
 #                                so the build job only compiles + tests it.
-# The Rust crate itself is gated by vars.PUBLISH_CRATE.
+# The Rust crate itself is gated by vars.PUBLISH_CRATE. A repo that lacks an SDK
+# directory (pith-h264 has none) skips that SDK's build and publish by itself.
+#
+# Every publish job asks its registry whether the version already exists and skips
+# it if so, so re-dispatching a tag fills in what is missing instead of failing on
+# what is already there. A version on a registry is permanent; that check is the
+# only thing between a retry and a hard error.
 #
 # Repo Secrets required:
 #   GITHUB_TOKEN             - built-in
 #   CI_APP_KEY               - n24q02m-ci GitHub App private key (release job: checkout + tag push)
+#   CARGO_REGISTRY_TOKEN     - crates.io token (publish-crate)
+#   CENTRAL_USERNAME / CENTRAL_PASSWORD / CENTRAL_GPG_PRIVATE_KEY / CENTRAL_GPG_PASSPHRASE
+#                            - Maven Central Portal token + signing key (publish-maven)
 #
 # Repo Variables required:
 #   CI_APP_ID                - n24q02m-ci GitHub App ID (see this repo's Actions variables)
@@ -124,6 +134,10 @@ jobs:
   # Cross-language commands here (pip, npm, go) are the pith suite's whole
   # point: this language variant builds the Python/Node/Go SDKs off the Rust
   # core, unlike the single-language per-language templates.
+  #
+  # `runs-on` MUST be the matrix value. It used to be the repo's default runner, so
+  # all three legs ran on Linux: the npm package would have carried one platform's
+  # cdylib and PyPI only ever got a Linux wheel.
   build:
     name: Build SDK Artifacts (${{ matrix.os }})
     if: |
@@ -132,7 +146,14 @@ jobs:
         (github.event_name == 'workflow_dispatch' && needs.release.outputs.released == 'true')
       )
     needs: [release]
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    # Which SDKs this repo has, read once from the tree. The publish jobs gate on
+    # these so a repo without an SDK (pith-h264 has none) does not fail a job that
+    # has nothing to ship.
+    outputs:
+      has_python: ${{ steps.detect.outputs.has_python }}
+      has_node: ${{ steps.detect.outputs.has_node }}
+      has_java: ${{ steps.detect.outputs.has_java }}
     env:
       # Where cargo drops the cdylib. Kept in one place so the SDK build steps
       # below never hardcode a toolchain-internal directory name.
@@ -143,6 +164,7 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - name: Harden Runner
+        if: runner.os == 'Linux'
         uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
         with:
           egress-policy: audit
@@ -150,16 +172,83 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ needs.release.outputs.tag || github.ref }}
+      - name: Detect which SDKs this repo has
+        id: detect
+        shell: bash
+        run: |
+          {
+            for sdk in python:pyproject.toml node:package.json go:go.mod java:pom.xml; do
+              lang="${sdk%%:*}"
+              file="${sdk#*:}"
+              if [ -f "sdk/$lang/$file" ]; then
+                echo "has_$lang=true"
+              else
+                echo "has_$lang=false"
+              fi
+            done
+          } >> "$GITHUB_OUTPUT"
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable @ 2026-08-05
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.13"
+      - name: Refuse a tag whose manifests disagree
+        # The tag, every workspace crate, sdk/python/pyproject.toml,
+        # sdk/node/package.json and sdk/java/pom.xml must all carry one version.
+        # A registry version is permanent: shipping `0.1.1` out of a package.json
+        # that still says `0.1.0` cannot be taken back. Fails before anything builds.
+        id: version-guard
+        shell: bash
+        env:
+          EXPECTED_VERSION: ${{ needs.release.outputs.version || github.ref_name }}
+        run: |
+          python -m pip install --quiet packaging
+          cargo metadata --no-deps --format-version 1 --locked > "$RUNNER_TEMP/crates.json"
+          CRATES_JSON="$RUNNER_TEMP/crates.json" python - <<'PYEOF'
+          import json, os, sys, tomllib
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+          from packaging.version import Version
+
+          expected = os.environ["EXPECTED_VERSION"].removeprefix("v")
+          seen = {}
+          crates = json.loads(Path(os.environ["CRATES_JSON"]).read_text(encoding="utf-8"))
+          for pkg in crates["packages"]:
+              seen["crate " + pkg["name"]] = pkg["version"]
+          node = Path("sdk/node/package.json")
+          if node.exists():
+              seen["sdk/node/package.json"] = json.loads(node.read_text(encoding="utf-8"))["version"]
+          pom = Path("sdk/java/pom.xml")
+          if pom.exists():
+              root = ET.parse(pom).getroot()
+              ns = root.tag[: root.tag.index("}") + 1] if root.tag.startswith("{") else ""
+              el = root.find(ns + "version")
+              seen["sdk/java/pom.xml"] = el.text.strip() if el is not None and el.text else "<missing>"
+          bad = [k for k, v in seen.items() if v != expected]
+          # PEP 440 spells a beta `0.1.1b1`, semver spells it `0.1.1-beta.1`: compare
+          # the pyproject version as a version, not as a string.
+          py = Path("sdk/python/pyproject.toml")
+          if py.exists():
+              found = tomllib.loads(py.read_text(encoding="utf-8")).get("project", {}).get("version")
+              if found is not None:
+                  seen["sdk/python/pyproject.toml"] = found
+                  if Version(found) != Version(expected):
+                      bad.append("sdk/python/pyproject.toml")
+          for key, value in sorted(seen.items()):
+              print(("BAD " if key in bad else "ok  ") + key + " = " + value)
+          if bad:
+              sys.exit("these manifests disagree with tag version " + expected + ": " + ", ".join(bad))
+          PYEOF
       - name: Build the core cdylib
         # --locked for the same reason ci.yml uses it on clippy and test: without it
         # cargo is free to re-resolve, so the SDK binaries attached to the release are
         # built against a dependency set CI never ran.
+        shell: bash
         run: cargo build --workspace --release --locked
       - name: Regenerate reference.json (hex-exact vectors)
         # Written next to the artifacts so every SDK package ships byte-identical
         # vectors; the committed copy is verified in ci.yml.
+        shell: bash
         run: cargo run --locked --bin gen-reference -- gen
       - name: Collect cdylibs for the SDKs
         shell: bash
@@ -169,33 +258,47 @@ jobs:
             \( -name '*.so' -o -name '*.dylib' -o -name '*.dll' \) \
             -exec cp {} dist/sdk/ \;
           ls -la dist/sdk
+      - name: Stage the cdylib as an npm prebuild for this platform
+        # The Node loader looks for prebuilds/<platform>-<arch>/, so each leg stages
+        # its own cdylib under the name Node itself reports for this runner.
+        if: steps.detect.outputs.has_node == 'true'
+        shell: bash
+        run: |
+          platform="$(node -p "process.platform + '-' + process.arch")"
+          mkdir -p "dist/prebuilds/$platform"
+          cp dist/sdk/* "dist/prebuilds/$platform/"
+          ls -la "dist/prebuilds/$platform"
       - name: Build the Python wheel (ctypes)
         # sdk/python's build backend copies the cdylib from PITH_CDYLIB_DIR into
         # the wheel. Wheels are OS-specific, so this runs inside the matrix;
         # publish-pypi uploads the three wheels together. Wheels only: a plain
         # sdist cannot carry the binary and is not shipped.
+        if: steps.detect.outputs.has_python == 'true'
         shell: bash
         run: |
           python -m pip install --upgrade build
           python -m build --wheel sdk/python
-      - name: Repair Linux wheel to manylinux
+      - name: Repair the Linux wheel to manylinux
         # PyPI rejects the bare linux_x86_64 platform tag; auditwheel rewrites it
         # to manylinux_2_17_x86_64 and bundles the cdylib it depends on.
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && steps.detect.outputs.has_python == 'true'
         shell: bash
         run: |
           python -m pip install --upgrade auditwheel
           auditwheel repair sdk/python/dist/*.whl -w sdk/python/dist-manylinux
           mv sdk/python/dist-manylinux/*.whl sdk/python/dist/
-      - name: Smoke the Go binding (cgo)
-        # sdk/go compiles against the freshly built cdylib; go.mod carries the
-        # module's own cgo flags, the env below only points the linker at the
-        # build output.
+      - name: Set up Go for the cgo binding
+        if: steps.detect.outputs.has_go == 'true'
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: sdk/go/go.mod
       - name: Go build and test
+        # sdk/go loads the freshly built cdylib at run time (dlopen / LoadLibrary), so
+        # the directory has to be absolute: the tests run from inside sdk/go.
+        if: steps.detect.outputs.has_go == 'true'
         shell: bash
+        env:
+          PITH_CDYLIB_DIR: ${{ github.workspace }}/target/release
         run: |
           cd sdk/go
           CGO_ENABLED=1 go build ./...
@@ -206,9 +309,13 @@ jobs:
           name: sdk-${{ matrix.os }}
           path: |
             dist/sdk/
+            dist/prebuilds/
             sdk/python/dist/
             reference.json
       - name: Attach build output to the release
+        # The three legs attach the same reference.json, so the asset delete/replace
+        # can race and 404. That must not take the publish jobs down with it.
+        continue-on-error: true
         if: vars.PUBLISH_RELEASE_ASSET == 'true'
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
@@ -240,12 +347,31 @@ jobs:
           ref: ${{ needs.release.outputs.tag || github.ref }}
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable @ 2026-08-05
-      - name: Publish
+      - name: Publish the crates crates.io does not have yet
         # A crates.io version cannot be replaced, only yanked. Without --locked the
         # artifact that goes up is built against a resolution CI never tested.
-        run: cargo publish --workspace --locked
+        # `cargo publish --workspace` errors on a version that already exists, so each
+        # workspace crate is looked up first and only the missing ones are passed on;
+        # one invocation keeps cargo's own dependency ordering between them.
+        shell: bash
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          cargo metadata --no-deps --format-version 1 --locked > "$RUNNER_TEMP/crates.json"
+          pending=()
+          while read -r name version; do
+            code="$(curl -sS -o /dev/null -w '%{http_code}' -A "pith-hash-cd (github.com/${GITHUB_REPOSITORY})" "https://crates.io/api/v1/crates/${name}/${version}")"
+            case "$code" in
+              200) echo "skip ${name} ${version}: already on crates.io" ;;
+              404) pending+=("-p" "$name") ;;
+              *) echo "crates.io answered HTTP ${code} for ${name} ${version}"; exit 1 ;;
+            esac
+          done < <(jq -r '.packages[] | select(.publish != []) | "\(.name) \(.version)"' "$RUNNER_TEMP/crates.json")
+          if [ "${#pending[@]}" -eq 0 ]; then
+            echo "every crate is already on crates.io"
+            exit 0
+          fi
+          cargo publish --locked "${pending[@]}"
 
   # ==================== Publish Python SDK ====================
   publish-pypi:
@@ -254,6 +380,7 @@ jobs:
     if: |
       !cancelled() && needs.build.result == 'success' &&
       needs.readme-sync.result == 'success' &&
+      needs.build.outputs.has_python == 'true' &&
       vars.PUBLISH_PYPI == 'true'
     runs-on: ubuntu-latest
     environment: pypi
@@ -272,6 +399,8 @@ jobs:
           merge-multiple: true
           path: wheelhouse
       - name: Collect wheels
+        # The Linux leg leaves both the bare linux_x86_64 wheel and its manylinux
+        # repair in the artifact; PyPI rejects the first, so it is left behind.
         run: |
           mkdir -p wheelhouse-flat
           find wheelhouse -name '*.whl' ! -name '*-linux_*' -exec cp {} wheelhouse-flat/ \;
@@ -282,9 +411,12 @@ jobs:
           twine check wheelhouse-flat/*.whl
       - name: Publish to PyPI
         # OIDC trusted publishing -- no PyPI token is stored on the repo.
+        # skip-existing: a re-dispatch uploads only the wheels PyPI is missing
+        # (e.g. the macOS and Windows wheels of a version that only has Linux).
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
         with:
           packages-dir: wheelhouse-flat
+          skip-existing: true
 
   # ==================== Publish Node SDK ====================
   publish-npm:
@@ -293,6 +425,7 @@ jobs:
     if: |
       !cancelled() && needs.build.result == 'success' &&
       needs.readme-sync.result == 'success' &&
+      needs.build.outputs.has_node == 'true' &&
       vars.PUBLISH_NPM == 'true'
     runs-on: ubuntu-latest
     permissions:
@@ -303,23 +436,185 @@ jobs:
         uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
         with:
           egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.release.outputs.tag || github.ref }}
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
+      - name: Check whether npm already has this version
+        # npm answers an unknown version of a known package with exit 0 and no output,
+        # and an unknown package with E404. Anything else (network, auth, 5xx) is not
+        # an answer, so it fails instead of being read as "not there".
+        id: exists
+        shell: bash
+        env:
+          VERSION: ${{ needs.release.outputs.version || github.ref_name }}
+        run: |
+          VERSION="${VERSION#v}"
+          NAME="$(node -p "require('./sdk/node/package.json').name")"
+          rc=0
+          out="$(npm view "${NAME}@${VERSION}" version 2>"$RUNNER_TEMP/npm-view.err")" || rc=$?
+          if [ "$rc" -eq 0 ] && [ "$out" = "$VERSION" ]; then
+            echo "${NAME}@${VERSION} is already on npm"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          elif [ "$rc" -eq 0 ] && [ -z "$out" ]; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          elif grep -q E404 "$RUNNER_TEMP/npm-view.err"; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          else
+            cat "$RUNNER_TEMP/npm-view.err"
+            exit 1
+          fi
       - name: Download SDK artifacts from all three OSes
+        if: steps.exists.outputs.skip == 'false'
         uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
         with:
           pattern: sdk-*
           merge-multiple: true
           path: sdk-dist
       - name: Assemble the npm package with prebuilt cdylibs
+        # Each leg staged its cdylib under prebuilds/<platform>-<arch>/. A package
+        # missing one of the three platforms installs fine and then fails to load on
+        # that OS, and the version cannot be replaced, so all three must be present.
+        if: steps.exists.outputs.skip == 'false'
         shell: bash
         run: |
           mkdir -p sdk/node/prebuilds
-          cp sdk-dist/dist/sdk/* sdk/node/prebuilds/
+          cp -R sdk-dist/dist/prebuilds/. sdk/node/prebuilds/
           cp sdk-dist/reference.json sdk/node/
+          for platform in linux-x64 win32-x64 darwin-arm64; do
+            test -n "$(ls -A "sdk/node/prebuilds/$platform" 2>/dev/null)" || { echo "no prebuild for $platform"; exit 1; }
+          done
           cd sdk/node
           npm ci
-          # OIDC provenance -- no npm token is stored on the repo.
-          npm publish --provenance --no-git-checks --tag "${{ needs.release.outputs.is_prerelease == 'true' && 'beta' || 'latest' }}"
+      - name: Publish to npm
+        # OIDC provenance -- no npm token is stored on the repo.
+        if: steps.exists.outputs.skip == 'false'
+        shell: bash
+        working-directory: sdk/node
+        env:
+          VERSION: ${{ needs.release.outputs.version || github.ref_name }}
+        run: |
+          case "${VERSION#v}" in
+            *-*) DIST_TAG=beta ;;
+            *) DIST_TAG=latest ;;
+          esac
+          npm publish --provenance --no-git-checks --tag "$DIST_TAG"
+
+  # ==================== Publish Java SDK ====================
+  publish-maven:
+    name: Publish Java SDK to Maven Central
+    needs: [readme-sync, release, build]
+    # Same !cancelled() discipline as publish-crate: the implicit "every need
+    # succeeded" gate is switched off, so each dependency this job actually
+    # relies on is named here. readme-sync gates the publish because a Maven
+    # Central version is permanent and cannot take a wrong README back down.
+    if: |
+      !cancelled() && needs.build.result == 'success' &&
+      needs.readme-sync.result == 'success' &&
+      needs.build.outputs.has_java == 'true' &&
+      vars.PUBLISH_MAVEN == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.release.outputs.tag || github.ref }}
+      - name: Check whether Maven Central already has this version
+        id: exists
+        shell: bash
+        env:
+          VERSION: ${{ needs.release.outputs.version || github.ref_name }}
+        run: |
+          VERSION="${VERSION#v}"
+          read -r GROUP ARTIFACT < <(python3 -c "import xml.etree.ElementTree as ET; r = ET.parse('sdk/java/pom.xml').getroot(); n = r.tag[: r.tag.index('}') + 1]; print(r.find(n + 'groupId').text, r.find(n + 'artifactId').text)")
+          URL="https://repo1.maven.org/maven2/${GROUP//.//}/${ARTIFACT}/${VERSION}/${ARTIFACT}-${VERSION}.pom"
+          code="$(curl -sS -o /dev/null -w '%{http_code}' "$URL")"
+          case "$code" in
+            200) echo "${GROUP}:${ARTIFACT}:${VERSION} is already on Maven Central"; echo "skip=true" >> "$GITHUB_OUTPUT" ;;
+            404) echo "skip=false" >> "$GITHUB_OUTPUT" ;;
+            *) echo "Maven Central answered HTTP ${code} for ${URL}"; exit 1 ;;
+          esac
+      - name: Download the cdylibs built by the matrix
+        # The Java tests replay reference.json through the real JNI bindings, so the
+        # artifacts only go up after the suite passes hex-exact against the cdylib the
+        # build job made. Nothing is rebuilt here: a second cargo build could drift from
+        # the binaries the other registries received.
+        if: steps.exists.outputs.skip == 'false'
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        with:
+          pattern: sdk-*
+          merge-multiple: true
+          path: sdk-dist
+      - name: Set up JDK 21 with Maven Central credentials and the GPG key
+        # server-id `central` lands in ~/.m2/settings.xml and matches the
+        # central-publishing-maven-plugin's publishingServerId; the gpg inputs
+        # import the signing key and wire GPG_PASSPHRASE into the
+        # gpg.passphrase server entry that maven-gpg-plugin reads.
+        if: steps.exists.outputs.skip == 'false'
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: "21"
+          server-id: central
+          server-username: CENTRAL_USERNAME
+          server-password: CENTRAL_PASSWORD
+          gpg-private-key: ${{ secrets.CENTRAL_GPG_PRIVATE_KEY }}
+          gpg-passphrase: GPG_PASSPHRASE
+      - name: Test, sign and upload the Java SDK to Maven Central
+        # -DskipPublishing=true makes the plugin assemble and sign the bundle but not
+        # send it, so a failing test or signature stops here with a real exit code and
+        # nothing is uploaded. The tests run (no -DskipTests) against the cdylib the
+        # build job produced.
+        if: steps.exists.outputs.skip == 'false'
+        shell: bash
+        env:
+          CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
+          CENTRAL_PASSWORD: ${{ secrets.CENTRAL_PASSWORD }}
+          GPG_PASSPHRASE: ${{ secrets.CENTRAL_GPG_PASSPHRASE }}
+          PITH_CDYLIB_DIR: ${{ github.workspace }}/sdk-dist/dist/sdk
+        run: |
+          mvn -B -Prelease -DskipPublishing=true deploy -f sdk/java/pom.xml
+          BUNDLE=sdk/java/target/central-publishing/central-bundle.zip
+          test -f "$BUNDLE" || { echo "bundle missing"; exit 1; }
+          python3 - <<'PYEOF'
+          import zipfile, os
+          src = "sdk/java/target/central-publishing/central-bundle.zip"
+          zin = zipfile.ZipFile(src)
+          zout = zipfile.ZipFile(src + ".clean", "w", zipfile.ZIP_DEFLATED)
+          kept = []
+          for n in zin.namelist():
+              name = n.replace("\\", "/")
+              base = name.split("/")[-1]
+              if base.startswith("maven-metadata") or base.startswith("_remote.repositories"):
+                  continue
+              zout.writestr(name, zin.read(n))
+              kept.append(name)
+          zout.close(); zin.close(); os.replace(src + ".clean", src)
+          poms = [n for n in kept if n.endswith(".pom")]
+          ascs = [n for n in kept if n.endswith(".asc")]
+          assert len(poms) >= 1 and len(ascs) >= 4, "bundle incomplete after clean: %s" % kept
+          print("clean bundle:", len(kept), "entries; poms:", poms)
+          PYEOF
+          TOKEN="$(printf "%s:%s" "$CENTRAL_USERNAME" "$CENTRAL_PASSWORD" | base64 -w0)"
+          echo "::add-mask::$TOKEN"
+          ID="$(curl -sS --fail-with-body -X POST -H "Authorization: Bearer $TOKEN" -F "bundle=@$BUNDLE" "https://central.sonatype.com/api/v1/publisher/upload?publishingType=AUTOMATIC")"
+          echo "deployment: $ID"
+          for _ in $(seq 1 60); do
+            sleep 10
+            ST="$(curl -sS --fail-with-body -X POST -H "Authorization: Bearer $TOKEN" "https://central.sonatype.com/api/v1/publisher/status?id=$ID")" || ST=""
+            echo "$ST"
+            if echo "$ST" | grep -q '"FAILED"'; then
+              exit 1
+            fi
+            if echo "$ST" | grep -qE '"(PUBLISHING|PUBLISHED)"'; then
+              exit 0
+            fi
+          done
+          echo "deployment $ID never left validation"
+          exit 1
