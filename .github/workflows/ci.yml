@@ -5,7 +5,12 @@
 # Suite contract (modhash company-split D1):
 #   - every crate is `pith-<domain>`; the only allowed dependencies are other
 #     pith-* crates (zero third-party dependencies, std only),
-#   - `forbid(unsafe_code)` across the workspace,
+#   - `forbid(unsafe_code)` across the workspace; the cdylib crates (the ones
+#     with an `ffi.rs`) use `deny(unsafe_code)` at the crate root and `allow` it
+#     only in `ffi.rs` (ratified, backlog D-12 / B-50),
+#   - cargo-deny (deny.toml) rejects any resolved crate outside the pith-*
+#     allow-list and any source outside crates.io and the pith-hash GitHub org
+#     (backlog B4); the audit job runs it next to cargo-audit,
 #   - reference.json carries hex-exact test vectors shared across the Python,
 #     Node and Go SDKs; a drifted reference.json fails CI here,
 #   - parser crates ship a `fuzz` feature plus tests/fuzz_corpus.rs replaying
@@ -200,7 +205,8 @@ jobs:
   # ============================================================================
   # Security audit of the (pith-only) dependency graph. Even an all-pith graph
   # is audited: a transitive crates.io release under a pith name is still a
-  # supply-chain input.
+  # supply-chain input. cargo-deny then enforces the zero-third-party rule on
+  # the resolved graph (Cargo.lock), which check-zero-deps.py cannot see.
   # ============================================================================
   audit:
     name: Cargo Audit
@@ -219,6 +225,11 @@ jobs:
         run: cargo install cargo-audit
       - name: Security audit
         run: cargo audit
+      - name: Install cargo-deny
+        # Compiled from source for the same reason as cargo-audit above.
+        run: cargo install cargo-deny --locked
+      - name: Dependency policy (pith-* allow-list, trusted sources)
+        run: cargo deny check bans sources
 
   # ============================================================================
   # Fuzz corpus replay for parser crates. Opt-in per repo: set the

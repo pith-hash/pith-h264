@@ -1,0 +1,49 @@
+# cargo-deny policy for the pith suite (backlog B4 / decision D-2).
+#
+# Suite contract: std-only Rust, the only allowed dependencies are other
+# `pith-*` crates. scripts/check-zero-deps.py checks the direct dependencies
+# of the workspace members from `cargo metadata --no-deps`; this file checks
+# the resolved graph (Cargo.lock), so a third-party crate pulled in
+# transitively through a pith-* dependency also fails the build.
+#
+# Marker: pith-deny-policy v1
+
+[graph]
+all-features = true
+
+[bans]
+# Allow-list: with a non-empty `allow`, every crate outside it is denied.
+# cargo-deny does not take globs here, so the 19 suite libraries and the
+# curator CLI are named; a new suite crate is added to this list.
+allow = [
+    { name = "pith-digest" },
+    { name = "pith-cdc" },
+    { name = "pith-file" },
+    { name = "pith-inflate" },
+    { name = "pith-zip" },
+    { name = "pith-png" },
+    { name = "pith-jpeg" },
+    { name = "pith-image" },
+    { name = "pith-pdf" },
+    { name = "pith-text" },
+    { name = "pith-unicode" },
+    { name = "pith-math" },
+    { name = "pith-audio" },
+    { name = "pith-flac" },
+    { name = "pith-mp3" },
+    { name = "pith-mp4" },
+    { name = "pith-h264" },
+    { name = "pith-video" },
+    { name = "pith-hash" },
+    { name = "pith-hash-cli" },
+]
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+# Only crates.io and the pith-hash GitHub org (the curator pins the suite
+# crates by git branch until the versioned pins land).
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-org = { github = ["pith-hash"] }
