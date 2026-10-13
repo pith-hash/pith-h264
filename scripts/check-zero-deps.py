@@ -3,7 +3,9 @@
 
 Every dependency of every workspace member must be a `pith-*` crate: normal,
 build and dev dependencies alike. The suite contract is std-only Rust with
-`forbid(unsafe_code)`; any third-party crate in the graph fails this gate.
+`forbid(unsafe_code)` (`deny` in the cdylib crates, `allow`ed only in `ffi.rs`);
+any third-party crate among the direct dependencies fails this gate. The
+resolved graph is checked by cargo-deny (deny.toml) in the audit job.
 
 Also asserts the suite naming rule: every workspace member is itself named
 `pith-<domain>`.
