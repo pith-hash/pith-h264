@@ -57,6 +57,57 @@ def stamp_toml(text: str, table: str, version: str) -> tuple[str, str] | None:
     return None
 
 
+_DEP_TABLE = re.compile(r"(^|\.)(dev-|build-)?dependencies$")
+_DEP_SUBTABLE = re.compile(r"(^|\.)(dev-|build-)?dependencies\.(?P<name>[^.]+)$")
+_INLINE_DEP = re.compile(r"^(?P<head>\s*(?P<key>[A-Za-z0-9_-]+|\"[^\"]+\"|'[^']+')\s*=\s*\{)(?P<body>.*)(?P<tail>\}.*)$", re.S)
+_INLINE_VERSION = re.compile(r'(\bversion\s*=\s*")[^"]*(")')
+_INLINE_PATH = re.compile(r"\bpath\s*=")
+
+
+def stamp_member_dependencies(text: str, names: set[str], version: str) -> str:
+    """Move a workspace member's `path` + `version` dependency to the stamped version.
+
+    Cargo never matches a prerelease against a caret requirement, so
+    `pith-hash = { path = "..", version = "0.1" }` cannot resolve against the
+    member stamped `0.1.1-beta.1`. Only inline-table dependencies on a member that
+    also carry a `path` are touched; registry and git dependencies keep their
+    requirement. The `[dependencies.<member>]` table form is refused rather than guessed.
+    """
+    lines = text.splitlines(keepends=True)
+    table = ""
+    sub_member = ""
+    sub_keys: set[str] = set()
+
+    def close_subtable() -> None:
+        if sub_member and {"path", "version"} <= sub_keys:
+            raise StampError(f"[{table}] pins a workspace member in table form; use an inline table")
+
+    for i, line in enumerate(lines):
+        header = _TABLE.match(line)
+        if header or line.lstrip().startswith("[["):
+            close_subtable()
+            table, sub_member, sub_keys = (header.group(1).strip() if header else ""), "", set()
+            sub = _DEP_SUBTABLE.search(table)
+            if sub and sub.group("name").strip("\"'") in names:
+                sub_member = sub.group("name")
+            continue
+        if sub_member:
+            key = line.split("=", 1)[0].strip()
+            if "=" in line and key in ("path", "version"):
+                sub_keys.add(key)
+            continue
+        if not _DEP_TABLE.search(table):
+            continue
+        m = _INLINE_DEP.match(line)
+        if m is None or m.group("key").strip("\"'") not in names:
+            continue
+        body = m.group("body")
+        if _INLINE_PATH.search(body) and _INLINE_VERSION.search(body):
+            lines[i] = m.group("head") + _INLINE_VERSION.sub(lambda v: v.group(1) + version + v.group(2), body, count=1) + m.group("tail")
+    close_subtable()
+    return "".join(lines)
+
+
 def stamp_cargo_lock(text: str, names: set[str], version: str) -> str:
     """Stamp workspace members in Cargo.lock; registry/git packages carry a `source`."""
     for name in sorted(names):
@@ -145,10 +196,16 @@ def stamp_tree(root: pathlib.Path, version: str) -> list[pathlib.Path]:
             _write(path, new)
             changed.append(path)
 
+    manifests = []
     member_names: set[str] = set()
     for manifest in _cargo_manifests(root):
         text = _read(manifest)
         data = tomllib.loads(text)
+        package = data.get("package")
+        if isinstance(package, dict) and isinstance(package.get("version"), str):
+            member_names.add(package["name"])
+        manifests.append((manifest, text, data))
+    for manifest, text, data in manifests:
         for table, section in (("package", data.get("package")), ("workspace.package", data.get("workspace", {}).get("package"))):
             if not isinstance(section, dict) or not isinstance(section.get("version"), str):
                 continue
@@ -157,9 +214,7 @@ def stamp_tree(root: pathlib.Path, version: str) -> list[pathlib.Path]:
                 raise StampError(f"{manifest}: [{table}] has a version the line editor cannot find")
             text = stamped[0]
             seen += 1
-            if table == "package":
-                member_names.add(section["name"])
-        apply(manifest, text)
+        apply(manifest, stamp_member_dependencies(text, member_names, version))
     lock = root / "Cargo.lock"
     if lock.exists() and member_names:
         apply(lock, stamp_cargo_lock(_read(lock), member_names, version))
