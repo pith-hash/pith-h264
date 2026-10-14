@@ -1,6 +1,6 @@
 {
   "name": "@pith-hash/pith-h264",
-  "version": "0.1.1-beta.1",
+  "version": "0.1.1",
   "description": "H.264/AVC baseline-subset decoding SDK: Annex-B NAL/SPS/PPS, CAVLC slices, in-loop deblocking via the pith-h264 Rust cdylib (koffi, prebuilt)",
   "license": "MIT",
   "main": "index.js",
