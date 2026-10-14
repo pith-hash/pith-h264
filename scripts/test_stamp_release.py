@@ -152,6 +152,39 @@ class TomlTests(unittest.TestCase):
         self.assertIsNone(sr.stamp_toml(text, "package", "0.1.1"))
 
 
+class PathDependencyTests(unittest.TestCase):
+    """A prerelease never satisfies a caret requirement ("0.1"), so a workspace
+    member's `path + version` dependency has to move with the version stamped."""
+
+    def test_member_path_dependency_requirement_is_stamped(self):
+        out = sr.stamp_member_dependencies(CLI, {"pith-x", "pith-x-cli"}, "0.1.1-beta.1")
+        self.assertIn('pith-x = { path = "..", version = "0.1.1-beta.1" }', out)
+
+    def test_non_member_and_pathless_dependencies_are_left_alone(self):
+        out = sr.stamp_member_dependencies(CARGO, {"pith-x", "pith-x-cli"}, "0.1.1-beta.1")
+        self.assertEqual(out, CARGO)
+
+    def test_dev_and_build_and_target_tables_are_covered(self):
+        text = (
+            '[dev-dependencies]\npith-x = { path = "..", version = "0.1" }\n'
+            '[build-dependencies]\npith-x = { version = "0.1", path = ".." }\n'
+            "[target.'cfg(unix)'.dependencies]\npith-x = { path = \"..\", version = \"0.1\" }\n"
+        )
+        out = sr.stamp_member_dependencies(text, {"pith-x"}, "0.1.2")
+        self.assertEqual(out.count('version = "0.1.2"'), 3)
+        self.assertNotIn('version = "0.1"', out)
+
+    def test_unstampable_member_dependency_is_an_error(self):
+        text = '[dependencies.pith-x]\npath = ".."\nversion = "0.1"\n'
+        with self.assertRaises(sr.StampError):
+            sr.stamp_member_dependencies(text, {"pith-x"}, "0.1.1")
+
+    def test_crlf_is_preserved(self):
+        out = sr.stamp_member_dependencies(CLI.replace("\n", "\r\n"), {"pith-x"}, "0.1.1")
+        self.assertIn('version = "0.1.1" }\r\n', out)
+        self.assertNotIn("\n\n", out.replace("\r\n", ""))
+
+
 class LockTests(unittest.TestCase):
     def test_stamps_workspace_members_not_registry_or_git_packages(self):
         new = sr.stamp_cargo_lock(LOCK, {"pith-x", "pith-x-cli"}, "0.1.1")
@@ -208,6 +241,8 @@ class MainTests(unittest.TestCase):
         read = lambda rel: (root / rel).read_text(encoding="utf-8")
         self.assertIn('version = "0.1.1-beta.1"', read("Cargo.toml"))
         self.assertIn('version = "0.1.1-beta.1"', read("cli/Cargo.toml"))
+        self.assertIn('pith-x = { path = "..", version = "0.1.1-beta.1" }', read("cli/Cargo.toml"))
+        self.assertIn('pith-y = { version = "0.1", git =', read("Cargo.toml"))
         self.assertIn('name = "pith-x"\nversion = "0.1.1-beta.1"', read("Cargo.lock"))
         self.assertIn('version = "0.1.1-beta.1"', read("sdk/python/pyproject.toml"))
         self.assertEqual(json.loads(read("sdk/node/package.json"))["version"], "0.1.1-beta.1")
