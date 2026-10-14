@@ -3,9 +3,25 @@ tag_format = "v{version}"
 commit_message = "feat(release): v{version} [skip ci]"
 major_on_zero = false
 allow_zero_version = true
+# PSR rewrites only the files it is told about and cannot express a Cargo
+# workspace, Cargo.lock, an npm lockfile or a pom.xml. The script stamps every
+# manifest the suite publishes from and `git add`s it: PSR stages only its own
+# list, and its commit takes the whole index, so what is staged here rides along
+# with the version bump (the same shape mcp-core uses for uv.lock). Without it the
+# tag says 0.1.1 while package.json and pom.xml still say 0.1.0.
+build_command = "python3 scripts/stamp-release.py"
 
 [semantic_release.changelog]
 changelog_file = "CHANGELOG.md"
+
+# The suite pins its siblings with a caret on the minor (`~0.1`), so a minor bump
+# is a deliberate, coordinated step for the whole suite and must never fall out of
+# one repo's commit history. Until that step is taken, `feat:` moves the patch
+# number exactly like `fix:`; otherwise a single feature commit in one repo ships
+# 0.2.0 next to its siblings' 0.1.x and breaks every `pith-* = "0.1"` pin.
+[semantic_release.commit_parser_options]
+minor_tags = []
+patch_tags = ["feat", "fix", "perf"]
 
 [semantic_release.remote]
 type = "github"

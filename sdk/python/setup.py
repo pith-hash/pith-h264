@@ -6,8 +6,9 @@ The wheel carries the Rust cdylib built by ``cargo build --release``:
 ``PITH_CDYLIB_DIR`` (default ``target/release`` at the repository root)
 is scanned for the cdylib and copied into the wheel by a ``build_py``
 hook. ``BinaryDistribution`` marks the distribution non-pure so the
-wheel is tagged per platform — the CD matrix builds one wheel per OS
-and publish-pypi uploads the three together.
+wheel is tagged per platform, and ``bdist_wheel_py3_none`` narrows the tag
+to ``py3-none-<platform>`` — the CD matrix builds one wheel per platform
+and publish-pypi uploads them together.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ import shutil
 from pathlib import Path
 
 from setuptools import Distribution, setup
+from setuptools.command.bdist_wheel import bdist_wheel
 from setuptools.command.build_py import build_py
 
 #: Every cdylib file name cargo may drop into the build directory, per
@@ -30,6 +32,19 @@ class BinaryDistribution(Distribution):
 
     def has_ext_modules(self) -> bool:  # noqa: D102
         return True
+
+
+class bdist_wheel_py3_none(bdist_wheel):
+    """Tags the wheel ``py3-none-<platform>``.
+
+    The cdylib is loaded through ctypes and never links the Python C API, so
+    one wheel per platform is valid for every CPython 3.x. The platform half
+    of the tag stays exactly what setuptools computed for the build host.
+    """
+
+    def get_tag(self):  # noqa: D102
+        _python, _abi, platform = super().get_tag()
+        return "py3", "none", platform
 
 
 class build_py_with_cdylib(build_py):
@@ -65,6 +80,6 @@ class build_py_with_cdylib(build_py):
 
 
 setup(
-    cmdclass={"build_py": build_py_with_cdylib},
+    cmdclass={"build_py": build_py_with_cdylib, "bdist_wheel": bdist_wheel_py3_none},
     distclass=BinaryDistribution,
 )

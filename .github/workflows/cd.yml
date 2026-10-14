@@ -14,6 +14,12 @@ name: CD
 # The Rust crate itself is gated by vars.PUBLISH_CRATE. A repo that lacks an SDK
 # directory (pith-h264 has none) skips that SDK's build and publish by itself.
 #
+# The cdylib is built on five platforms (PITH_PLATFORMS below, one matrix leg each)
+# and every package that ships it is checked for all five before it is uploaded:
+# scripts/check-package-contents.py lists the wheel / JAR / npm tarball entries and
+# fails the job when a platform's library is missing. A registry accepts a package
+# without a library and the version can never be replaced, so the check runs first.
+#
 # Every publish job asks its registry whether the version already exists and skips
 # it if so, so re-dispatching a tag fills in what is missing instead of failing on
 # what is already there. A version on a registry is permanent; that check is the
@@ -48,10 +54,18 @@ on:
         required: false
         type: string
         default: ""
+      expected_version:
+        description: "Optional guard: abort before tagging unless the computed version is this one (e.g. 0.1.1, without the -beta.N suffix)."
+        required: false
+        type: string
+        default: ""
 
 env:
   # Release lane: dispatch-only (release_type=beta, then stable); push only feeds tag builds.
   RELEASE_TYPE: ${{ inputs.release_type }}
+  # Node-style platform ids. Must name exactly the legs of the build matrix: the
+  # package-contents gates read this list, the matrix produces the libraries.
+  PITH_PLATFORMS: linux-x64 linux-arm64 darwin-arm64 darwin-x64 win32-x64
 
 permissions:
   contents: write
@@ -100,8 +114,45 @@ jobs:
           token: ${{ steps.app-token.outputs.token }}
       # Version bump runs on the fork (orphan-tag + registry-collision guards).
       # The publish steps below stay upstream — the fork does not replace them.
+      - id: plan
+        # Read-only: computes the version the next step would tag and mutates nothing.
+        name: Plan the release (read-only)
+        uses: n24q02m/better-semantic-release@0e57c64481cb78492ad1ff8025b0cd368dbb695f # v1.13.0
+        if: inputs.publish_existing_tag == ''
+        with:
+          github_token: ${{ steps.app-token.outputs.token }}
+          config_file: semantic-release.toml
+          mode: plan
+      - name: Refuse a release that is not the expected version
+        # A tag cannot be taken back and a registry version cannot be replaced, so a
+        # commit history that would bump the suite off its patch line (0.2.0 next to
+        # 0.1.x siblings breaks every `pith-* = "0.1"` pin) stops here, before the tag.
+        # `plan` does not know it is a beta, so the -beta.N suffix is cut before comparing.
+        if: inputs.publish_existing_tag == '' && inputs.expected_version != ''
+        shell: bash
+        env:
+          PLAN_JSON: ${{ steps.plan.outputs.plan_json }}
+          PLAN_BLOCKED: ${{ steps.plan.outputs.plan_blocked }}
+          EXPECTED: ${{ inputs.expected_version }}
+        run: |
+          python3 - <<'PYEOF'
+          import json, os, sys
+          plan = json.load(open(os.environ["PLAN_JSON"], encoding="utf-8"))
+          os.remove(os.environ["PLAN_JSON"])  # keep the worktree clean for the release commit
+          planned = (plan.get("version") or "").split("-")[0]
+          expected = os.environ["EXPECTED"].removeprefix("v")
+          print("planned:", plan.get("version"), "| expected:", expected, "| blocked:", os.environ["PLAN_BLOCKED"])
+          if os.environ["PLAN_BLOCKED"] == "true":
+              sys.exit("the release plan is blocked: " + json.dumps(plan.get("blockers")))
+          if planned != expected:
+              sys.exit("computed version " + str(plan.get("version")) + " is not the expected " + expected)
+          PYEOF
+      - name: Drop the plan file
+        if: always() && inputs.publish_existing_tag == ''
+        shell: bash
+        run: rm -f release-plan.json
       - id: release
-        uses: n24q02m/better-semantic-release@087b84e8d2ba75bdec350924d3bf8247088e0b1a # v1.4.0
+        uses: n24q02m/better-semantic-release@0e57c64481cb78492ad1ff8025b0cd368dbb695f # v1.13.0
         if: inputs.publish_existing_tag == ''
         with:
           github_token: ${{ steps.app-token.outputs.token }}
@@ -111,6 +162,16 @@ jobs:
           config_file: semantic-release.toml
           prerelease: ${{ env.RELEASE_TYPE == 'beta' }}
           prerelease_token: beta
+      - name: Confirm the tag carries the expected version
+        # The plan above cannot see the beta suffix; this is the exact comparison.
+        if: inputs.publish_existing_tag == '' && inputs.expected_version != '' && steps.release.outputs.released == 'true'
+        shell: bash
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+          EXPECTED: ${{ inputs.expected_version }}
+        run: |
+          base="${VERSION%%-*}"
+          [ "$base" = "${EXPECTED#v}" ] || { echo "released ${VERSION}, expected ${EXPECTED}"; exit 1; }
       - if: inputs.publish_existing_tag == '' && steps.release.outputs.released == 'true'
         uses: python-semantic-release/publish-action@5a5718ce47b892ef699f2972dae122297771d641 # v10.6.1
         with:
@@ -126,11 +187,12 @@ jobs:
             echo "released=true"
             echo "tag=$TAG"
             echo "version=$VERSION"
-            echo "is_prerelease=false"
+            # A hyphen in the version is a semver pre-release (0.1.1-beta.1).
+            case "$VERSION" in *-*) echo "is_prerelease=true" ;; *) echo "is_prerelease=false" ;; esac
           } >> "$GITHUB_OUTPUT"
 
   # ==================== Build ====================
-  # One cdylib per OS plus the SDK artifacts that wrap it, on every tag build.
+  # One cdylib per platform plus the SDK artifacts that wrap it, on every tag build.
   # Cross-language commands here (pip, npm, go) are the pith suite's whole
   # point: this language variant builds the Python/Node/Go SDKs off the Rust
   # core, unlike the single-language per-language templates.
@@ -138,8 +200,14 @@ jobs:
   # `runs-on` MUST be the matrix value. It used to be the repo's default runner, so
   # all three legs ran on Linux: the npm package would have carried one platform's
   # cdylib and PyPI only ever got a Linux wheel.
+  #
+  # The matrix is the single list of platforms the suite ships. `platform` is the id
+  # Node itself reports (process.platform-process.arch); the npm loader, the JAR
+  # resource directory and PITH_PLATFORMS all use that same spelling. Nothing is
+  # cross-compiled: each leg builds on a runner of its own architecture, so the
+  # wheel and the cdylib it carries cannot disagree.
   build:
-    name: Build SDK Artifacts (${{ matrix.os }})
+    name: Build SDK Artifacts (${{ matrix.platform }})
     if: |
       !cancelled() && needs.release.result != 'failure' && (
         startsWith(github.ref, 'refs/tags/v') ||
@@ -154,6 +222,7 @@ jobs:
       has_python: ${{ steps.detect.outputs.has_python }}
       has_node: ${{ steps.detect.outputs.has_node }}
       has_java: ${{ steps.detect.outputs.has_java }}
+      stem: ${{ steps.stem.outputs.stem }}
     env:
       # Where cargo drops the cdylib. Kept in one place so the SDK build steps
       # below never hardcode a toolchain-internal directory name.
@@ -161,7 +230,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - { platform: linux-x64, os: ubuntu-latest }
+          - { platform: linux-arm64, os: ubuntu-24.04-arm }
+          - { platform: darwin-arm64, os: macos-latest }
+          - { platform: darwin-x64, os: macos-15-intel }
+          - { platform: win32-x64, os: windows-latest }
     steps:
       - name: Harden Runner
         if: runner.os == 'Linux'
@@ -192,6 +266,22 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.13"
+      - name: Name the cdylib
+        # The library file name is derived from the one cdylib target the workspace
+        # declares, so the package-contents gates never hardcode a per-repo name.
+        id: stem
+        shell: bash
+        run: |
+          python - <<'PYEOF'
+          import json, os, subprocess, sys
+          meta = json.loads(subprocess.check_output(["cargo", "metadata", "--no-deps", "--format-version", "1", "--locked"]))
+          stems = sorted({t["name"].replace("-", "_") for p in meta["packages"] for t in p["targets"] if "cdylib" in t["crate_types"]})
+          if len(stems) != 1:
+              sys.exit("expected exactly one cdylib target in the workspace, found: %r" % stems)
+          print("cdylib stem:", stems[0])
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+              out.write("stem=" + stems[0] + chr(10))
+          PYEOF
       - name: Refuse a tag whose manifests disagree
         # The tag, every workspace crate, sdk/python/pyproject.toml,
         # sdk/node/package.json and sdk/java/pom.xml must all carry one version.
@@ -249,7 +339,12 @@ jobs:
         # Written next to the artifacts so every SDK package ships byte-identical
         # vectors; the committed copy is verified in ci.yml.
         shell: bash
-        run: cargo run --locked --bin gen-reference -- gen
+        run: |
+          cargo run --locked --bin gen-reference -- gen
+          # pith-math keeps its vectors in tests/ and its generator writes there; the
+          # other repos write ./reference.json directly. Either way the file that
+          # ships is the one in the repository root.
+          test -f reference.json || cp tests/reference.json reference.json
       - name: Collect cdylibs for the SDKs
         shell: bash
         run: |
@@ -258,20 +353,21 @@ jobs:
             \( -name '*.so' -o -name '*.dylib' -o -name '*.dll' \) \
             -exec cp {} dist/sdk/ \;
           ls -la dist/sdk
-      - name: Stage the cdylib as an npm prebuild for this platform
-        # The Node loader looks for prebuilds/<platform>-<arch>/, so each leg stages
-        # its own cdylib under the name Node itself reports for this runner.
-        if: steps.detect.outputs.has_node == 'true'
+      - name: Stage the cdylib under this platform's id
+        # The Node loader looks for prebuilds/<platform>/ and the JAR carries the same
+        # directory name under hash/pith/native/, so each leg stages its own cdylib
+        # under the matrix id. Unconditional: the Java job and the release assets
+        # read it too, and a repo without an SDK just uploads a directory nobody reads.
         shell: bash
         run: |
-          platform="$(node -p "process.platform + '-' + process.arch")"
-          mkdir -p "dist/prebuilds/$platform"
-          cp dist/sdk/* "dist/prebuilds/$platform/"
-          ls -la "dist/prebuilds/$platform"
+          mkdir -p "dist/prebuilds/${{ matrix.platform }}" dist/assets
+          cp dist/sdk/* "dist/prebuilds/${{ matrix.platform }}/"
+          for f in dist/sdk/*; do cp "$f" "dist/assets/${{ matrix.platform }}-$(basename "$f")"; done
+          ls -la "dist/prebuilds/${{ matrix.platform }}"
       - name: Build the Python wheel (ctypes)
         # sdk/python's build backend copies the cdylib from PITH_CDYLIB_DIR into
-        # the wheel. Wheels are OS-specific, so this runs inside the matrix;
-        # publish-pypi uploads the three wheels together. Wheels only: a plain
+        # the wheel. Wheels are platform-specific, so this runs inside the matrix;
+        # publish-pypi uploads all of them together. Wheels only: a plain
         # sdist cannot carry the binary and is not shipped.
         if: steps.detect.outputs.has_python == 'true'
         shell: bash
@@ -279,8 +375,8 @@ jobs:
           python -m pip install --upgrade build
           python -m build --wheel sdk/python
       - name: Repair the Linux wheel to manylinux
-        # PyPI rejects the bare linux_x86_64 platform tag; auditwheel rewrites it
-        # to manylinux_2_17_x86_64 and bundles the cdylib it depends on.
+        # PyPI rejects the bare linux_<arch> platform tag; auditwheel rewrites it
+        # to manylinux_2_*_<arch> and bundles the cdylib it depends on.
         if: runner.os == 'Linux' && steps.detect.outputs.has_python == 'true'
         shell: bash
         run: |
@@ -306,14 +402,17 @@ jobs:
       - name: Upload SDK artifacts
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
-          name: sdk-${{ matrix.os }}
+          # dist/sdk/ is not uploaded: libpith_x.so is the same file name on both Linux
+          # legs (and .dylib on both macOS legs), so merging the artifacts would let
+          # one overwrite the other. dist/prebuilds/<platform>/ keeps them apart.
+          name: sdk-${{ matrix.platform }}
           path: |
-            dist/sdk/
             dist/prebuilds/
+            dist/assets/
             sdk/python/dist/
             reference.json
       - name: Attach build output to the release
-        # The three legs attach the same reference.json, so the asset delete/replace
+        # The legs attach the same reference.json, so the asset delete/replace
         # can race and 404. That must not take the publish jobs down with it.
         continue-on-error: true
         if: vars.PUBLISH_RELEASE_ASSET == 'true'
@@ -321,7 +420,7 @@ jobs:
         with:
           tag_name: ${{ needs.release.outputs.tag || github.ref_name }}
           files: |
-            dist/sdk/*
+            dist/assets/*
             reference.json
 
   # ==================== Publish crate ====================
@@ -392,14 +491,17 @@ jobs:
         uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
         with:
           egress-policy: audit
-      - name: Download SDK artifacts from all three OSes
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.release.outputs.tag || github.ref }}
+      - name: Download SDK artifacts from every platform
         uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
         with:
           pattern: sdk-*
           merge-multiple: true
           path: wheelhouse
       - name: Collect wheels
-        # The Linux leg leaves both the bare linux_x86_64 wheel and its manylinux
+        # Each Linux leg leaves both the bare linux_<arch> wheel and its manylinux
         # repair in the artifact; PyPI rejects the first, so it is left behind.
         run: |
           mkdir -p wheelhouse-flat
@@ -409,6 +511,14 @@ jobs:
         run: |
           python -m pip install --upgrade twine
           twine check wheelhouse-flat/*.whl
+      - name: Refuse a wheel set that misses a platform
+        # twine check only validates metadata. A wheel without its cdylib, or a
+        # platform with no wheel at all, installs and then fails at import, and the
+        # version cannot be replaced on PyPI.
+        env:
+          STEM: ${{ needs.build.outputs.stem }}
+        run: |
+          python scripts/check-package-contents.py wheels 'wheelhouse-flat/*.whl' --platforms "${PITH_PLATFORMS// /,}" --stem "$STEM"
       - name: Publish to PyPI
         # OIDC trusted publishing -- no PyPI token is stored on the repo.
         # skip-existing: a re-dispatch uploads only the wheels PyPI is missing
@@ -467,7 +577,7 @@ jobs:
             cat "$RUNNER_TEMP/npm-view.err"
             exit 1
           fi
-      - name: Download SDK artifacts from all three OSes
+      - name: Download SDK artifacts from every platform
         if: steps.exists.outputs.skip == 'false'
         uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
         with:
@@ -475,33 +585,45 @@ jobs:
           merge-multiple: true
           path: sdk-dist
       - name: Assemble the npm package with prebuilt cdylibs
-        # Each leg staged its cdylib under prebuilds/<platform>-<arch>/. A package
-        # missing one of the three platforms installs fine and then fails to load on
-        # that OS, and the version cannot be replaced, so all three must be present.
+        # Each leg staged its cdylib under prebuilds/<platform>/. The package is packed
+        # here, then read back by the next step before anything is published.
         if: steps.exists.outputs.skip == 'false'
+        id: pack
         shell: bash
         run: |
           mkdir -p sdk/node/prebuilds
           cp -R sdk-dist/dist/prebuilds/. sdk/node/prebuilds/
           cp sdk-dist/reference.json sdk/node/
-          for platform in linux-x64 win32-x64 darwin-arm64; do
-            test -n "$(ls -A "sdk/node/prebuilds/$platform" 2>/dev/null)" || { echo "no prebuild for $platform"; exit 1; }
-          done
           cd sdk/node
           npm ci
+          TARBALL="$RUNNER_TEMP/$(npm pack --silent --pack-destination "$RUNNER_TEMP")"
+          echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
+      - name: Refuse a tarball that misses a platform
+        # A package missing one platform installs fine and then fails to load on that
+        # OS, and the version cannot be replaced, so the tarball that will be
+        # published is opened and every platform's library must be in it.
+        if: steps.exists.outputs.skip == 'false'
+        shell: bash
+        env:
+          STEM: ${{ needs.build.outputs.stem }}
+          TARBALL: ${{ steps.pack.outputs.tarball }}
+        run: |
+          python3 scripts/check-package-contents.py npm "$TARBALL" --platforms "${PITH_PLATFORMS// /,}" --stem "$STEM"
       - name: Publish to npm
-        # OIDC provenance -- no npm token is stored on the repo.
+        # OIDC provenance -- no npm token is stored on the repo. The gated tarball
+        # itself is what goes up, not a second pack of the same directory.
         if: steps.exists.outputs.skip == 'false'
         shell: bash
         working-directory: sdk/node
         env:
           VERSION: ${{ needs.release.outputs.version || github.ref_name }}
+          TARBALL: ${{ steps.pack.outputs.tarball }}
         run: |
           case "${VERSION#v}" in
             *-*) DIST_TAG=beta ;;
             *) DIST_TAG=latest ;;
           esac
-          npm publish --provenance --no-git-checks --tag "$DIST_TAG"
+          npm publish "$TARBALL" --provenance --no-git-checks --tag "$DIST_TAG"
 
   # ==================== Publish Java SDK ====================
   publish-maven:
@@ -551,6 +673,21 @@ jobs:
           pattern: sdk-*
           merge-multiple: true
           path: sdk-dist
+      - name: Bundle every platform's cdylib into the JAR
+        # PithNative extracts hash/pith/native/<platform>/<library> from the JAR when
+        # no override is set, so a JAR built without these resources only works where
+        # PITH_CDYLIB_DIR is set by hand. Every platform must be present: the version
+        # cannot be replaced, and the JAR is the whole package.
+        if: steps.exists.outputs.skip == 'false'
+        shell: bash
+        run: |
+          for platform in $PITH_PLATFORMS; do
+            dest="sdk/java/src/main/resources/hash/pith/native/$platform"
+            mkdir -p "$dest"
+            cp sdk-dist/dist/prebuilds/"$platform"/* "$dest"/
+            test -n "$(ls -A "$dest")" || { echo "no cdylib for $platform"; exit 1; }
+          done
+          find sdk/java/src/main/resources/hash/pith/native -type f
       - name: Set up JDK 21 with Maven Central credentials and the GPG key
         # server-id `central` lands in ~/.m2/settings.xml and matches the
         # central-publishing-maven-plugin's publishingServerId; the gpg inputs
@@ -566,18 +703,19 @@ jobs:
           server-password: CENTRAL_PASSWORD
           gpg-private-key: ${{ secrets.CENTRAL_GPG_PRIVATE_KEY }}
           gpg-passphrase: GPG_PASSPHRASE
-      - name: Test, sign and upload the Java SDK to Maven Central
+      - name: Test, sign and bundle the Java SDK
         # -DskipPublishing=true makes the plugin assemble and sign the bundle but not
         # send it, so a failing test or signature stops here with a real exit code and
-        # nothing is uploaded. The tests run (no -DskipTests) against the cdylib the
-        # build job produced.
+        # nothing is uploaded. The tests run (no -DskipTests) against the linux-x64
+        # cdylib the build job produced; the other platforms are checked by the
+        # package-contents gate below, not executed.
         if: steps.exists.outputs.skip == 'false'
         shell: bash
         env:
           CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
           CENTRAL_PASSWORD: ${{ secrets.CENTRAL_PASSWORD }}
           GPG_PASSPHRASE: ${{ secrets.CENTRAL_GPG_PASSPHRASE }}
-          PITH_CDYLIB_DIR: ${{ github.workspace }}/sdk-dist/dist/sdk
+          PITH_CDYLIB_DIR: ${{ github.workspace }}/sdk-dist/dist/prebuilds/linux-x64
         run: |
           mvn -B -Prelease -DskipPublishing=true deploy -f sdk/java/pom.xml
           BUNDLE=sdk/java/target/central-publishing/central-bundle.zip
@@ -601,6 +739,32 @@ jobs:
           assert len(poms) >= 1 and len(ascs) >= 4, "bundle incomplete after clean: %s" % kept
           print("clean bundle:", len(kept), "entries; poms:", poms)
           PYEOF
+      - name: Refuse a JAR that misses a platform
+        # The JAR inside the bundle is the file Maven Central will serve. Its entries
+        # are listed (never executed) and every platform's library must be there.
+        if: steps.exists.outputs.skip == 'false'
+        shell: bash
+        env:
+          STEM: ${{ needs.build.outputs.stem }}
+        run: |
+          python3 - <<'PYEOF'
+          import os, zipfile
+          bundle = zipfile.ZipFile("sdk/java/target/central-publishing/central-bundle.zip")
+          jars = [n for n in bundle.namelist() if n.endswith(".jar") and not n.endswith(("-sources.jar", "-javadoc.jar"))]
+          assert len(jars) == 1, "expected one main JAR in the bundle, found: %r" % jars
+          with open(os.path.join(os.environ["RUNNER_TEMP"], "main.jar"), "wb") as out:
+              out.write(bundle.read(jars[0]))
+          print("main jar:", jars[0])
+          PYEOF
+          python3 scripts/check-package-contents.py jar "$RUNNER_TEMP/main.jar" --platforms "${PITH_PLATFORMS// /,}" --stem "$STEM" --prefix hash/pith/native
+      - name: Upload the Java SDK to Maven Central
+        if: steps.exists.outputs.skip == 'false'
+        shell: bash
+        env:
+          CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
+          CENTRAL_PASSWORD: ${{ secrets.CENTRAL_PASSWORD }}
+        run: |
+          BUNDLE=sdk/java/target/central-publishing/central-bundle.zip
           TOKEN="$(printf "%s:%s" "$CENTRAL_USERNAME" "$CENTRAL_PASSWORD" | base64 -w0)"
           echo "::add-mask::$TOKEN"
           ID="$(curl -sS --fail-with-body -X POST -H "Authorization: Bearer $TOKEN" -F "bundle=@$BUNDLE" "https://central.sonatype.com/api/v1/publisher/upload?publishingType=AUTOMATIC")"

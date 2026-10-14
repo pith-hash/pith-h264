@@ -89,6 +89,10 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Zero-dependency gate (pith-* only)
         run: python scripts/check-zero-deps.py
+      - name: Package-contents gate self-test
+        run: python -m unittest scripts/test_check_package_contents.py
+      - name: Release version stamp self-test
+        run: python scripts/test_stamp_release.py
       - name: Run clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Run tests
