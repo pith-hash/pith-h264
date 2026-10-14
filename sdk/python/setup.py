@@ -14,6 +14,7 @@ and publish-pypi uploads them together.
 from __future__ import annotations
 
 import os
+import platform as host
 import shutil
 from pathlib import Path
 
@@ -34,17 +35,34 @@ class BinaryDistribution(Distribution):
         return True
 
 
+def native_platform_tag(platform: str, machine: str) -> str:
+    """Narrow a macOS ``universal2`` tag to the architecture actually built.
+
+    A universal2 CPython tags every wheel it builds ``universal2``, but the
+    cdylib is compiled for one architecture only; the tag has to say which one
+    or pip would install an arm64-only library on an Intel Mac. Every other
+    platform tag is already specific and passes through unchanged.
+    """
+    if not (platform.startswith("macosx_") and platform.endswith("_universal2")):
+        return platform
+    arch = {"arm64": "arm64", "aarch64": "arm64", "x86_64": "x86_64", "amd64": "x86_64"}.get(machine.lower())
+    if arch is None:
+        raise RuntimeError(f"pith-h264: cannot narrow {platform} for host architecture {machine!r}")
+    return platform[: -len("universal2")] + arch
+
+
 class bdist_wheel_py3_none(bdist_wheel):
     """Tags the wheel ``py3-none-<platform>``.
 
     The cdylib is loaded through ctypes and never links the Python C API, so
     one wheel per platform is valid for every CPython 3.x. The platform half
-    of the tag stays exactly what setuptools computed for the build host.
+    of the tag is what setuptools computed for the build host, with a macOS
+    ``universal2`` narrowed to the single architecture the cdylib was built for.
     """
 
     def get_tag(self):  # noqa: D102
         _python, _abi, platform = super().get_tag()
-        return "py3", "none", platform
+        return "py3", "none", native_platform_tag(platform, host.machine())
 
 
 class build_py_with_cdylib(build_py):

@@ -704,11 +704,14 @@ jobs:
           gpg-private-key: ${{ secrets.CENTRAL_GPG_PRIVATE_KEY }}
           gpg-passphrase: GPG_PASSPHRASE
       - name: Test, sign and bundle the Java SDK
-        # -DskipPublishing=true makes the plugin assemble and sign the bundle but not
-        # send it, so a failing test or signature stops here with a real exit code and
-        # nothing is uploaded. The tests run (no -DskipTests) against the linux-x64
-        # cdylib the build job produced; the other platforms are checked by the
-        # package-contents gate below, not executed.
+        # Two passes. `verify` runs the tests (against the linux-x64 cdylib the build
+        # job produced; the other platforms are checked by the package-contents gate
+        # below, not executed) and signs, so a failing test or signature stops here with
+        # a real exit code. The second pass only assembles central-bundle.zip: it points
+        # the plugin at an unreachable Central URL so the bundle is built and the upload
+        # fails, which `|| true` absorbs; the file check is what proves it was assembled.
+        # -DskipPublishing=true is NOT usable here: central-publishing 0.11.0 then skips
+        # the bundling too and writes no zip.
         if: steps.exists.outputs.skip == 'false'
         shell: bash
         env:
@@ -717,7 +720,8 @@ jobs:
           GPG_PASSPHRASE: ${{ secrets.CENTRAL_GPG_PASSPHRASE }}
           PITH_CDYLIB_DIR: ${{ github.workspace }}/sdk-dist/dist/prebuilds/linux-x64
         run: |
-          mvn -B -Prelease -DskipPublishing=true deploy -f sdk/java/pom.xml
+          mvn -B -Prelease verify -f sdk/java/pom.xml
+          mvn -B -Prelease -DskipTests -DcentralBaseUrl=http://127.0.0.1:9 deploy -f sdk/java/pom.xml || true
           BUNDLE=sdk/java/target/central-publishing/central-bundle.zip
           test -f "$BUNDLE" || { echo "bundle missing"; exit 1; }
           python3 - <<'PYEOF'
