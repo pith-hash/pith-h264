@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import types
 import unittest
 import importlib.util
 from pathlib import Path
@@ -49,10 +50,18 @@ class WheelTagTests(unittest.TestCase):
 
 
 def _load_setup_module():
-    """Import setup.py without running setuptools' setup()."""
+    """Import setup.py without setuptools: the host interpreter may not ship it
+    (CPython 3.12+ venvs do not), and only the pure tag helper is under test."""
+    stubs = {}
+    for name in ("setuptools", "setuptools.command", "setuptools.command.bdist_wheel", "setuptools.command.build_py"):
+        stubs[name] = types.ModuleType(name)
+    stubs["setuptools"].Distribution = type("Distribution", (), {})
+    stubs["setuptools"].setup = lambda **kwargs: None
+    stubs["setuptools.command.bdist_wheel"].bdist_wheel = type("bdist_wheel", (), {})
+    stubs["setuptools.command.build_py"].build_py = type("build_py", (), {})
     spec = importlib.util.spec_from_file_location("pith_wheel_setup", SDK / "setup.py")
     module = importlib.util.module_from_spec(spec)
-    with mock.patch("setuptools.setup"):
+    with mock.patch.dict(sys.modules, stubs):
         spec.loader.exec_module(module)
     return module
 
