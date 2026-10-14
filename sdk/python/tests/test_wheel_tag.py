@@ -9,6 +9,7 @@ minor version for no reason.
 
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -20,19 +21,20 @@ SDK = Path(__file__).resolve().parent.parent
 
 class WheelTagTests(unittest.TestCase):
     def test_wheel_is_py3_none_platform(self):
+        # Build through pip, as the CD does: the isolated build env brings the
+        # setuptools pinned in pyproject.toml, so the host interpreter needs no
+        # setuptools of its own (CPython 3.12+ venvs ship without it).
         with tempfile.TemporaryDirectory() as lib, tempfile.TemporaryDirectory() as work:
             # setup.py scans PITH_CDYLIB_DIR for any of the three cdylib names.
             (Path(lib) / "pith_h264.dll").write_bytes(b"MZ")
+            source = Path(work) / "sdk"
+            shutil.copytree(
+                SDK, source,
+                ignore=shutil.ignore_patterns("build", "dist", "*.egg-info", "__pycache__", ".pytest_cache"),
+            )
             out = Path(work) / "dist"
             subprocess.run(
-                [
-                    sys.executable, "setup.py", "-q",
-                    "build", "--build-base", str(Path(work) / "build"),
-                    "egg_info", "--egg-base", work,
-                    "bdist_wheel", "--dist-dir", str(out),
-                    "--bdist-dir", str(Path(work) / "bdist"),
-                ],
-                cwd=SDK,
+                [sys.executable, "-m", "pip", "wheel", "--no-deps", "-q", "-w", str(out), str(source)],
                 env={**os.environ, "PITH_CDYLIB_DIR": lib},
                 check=True,
             )
