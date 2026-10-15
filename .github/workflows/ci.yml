@@ -89,6 +89,10 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Zero-dependency gate (pith-* only)
         run: python scripts/check-zero-deps.py
+      - name: Licence hygiene gate (canonical LICENSE, NOTICE present)
+        run: python scripts/check-license-clean.py
+      - name: Licence hygiene gate self-test
+        run: python -m unittest scripts/test_check_license_clean.py
       - name: Package-contents gate self-test
         run: python -m unittest scripts/test_check_package_contents.py
       - name: Release version stamp self-test
